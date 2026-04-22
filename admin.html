@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MadPix Admin</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header admin-header">
+    <h1 class="logo">
+      <span class="logo-mad">Mad</span><span class="logo-pix">Pix</span>
+      <span class="admin-logo-suffix">Admin</span>
+    </h1>
+  </header>
+
+  <main class="container admin-container">
+
+    <!-- STATS BAR (NEW - SAFE) -->
+    <section class="admin-stats-bar">
+      <div class="admin-stat">
+        <div class="admin-stat-value" id="statVisits">—</div>
+        <div class="admin-stat-label">Visits</div>
+      </div>
+
+      <div class="admin-stat">
+        <div class="admin-stat-value" id="statPurchases">—</div>
+        <div class="admin-stat-label">Purchases</div>
+      </div>
+
+      <div class="admin-stat">
+        <div class="admin-stat-value" id="statRevenue">—</div>
+        <div class="admin-stat-label">Revenue</div>
+      </div>
+    </section>
+
+    <!-- EXISTING INTRO -->
+    <section class="intro admin-intro">
+      <h2>Admin Dashboard</h2>
+      <p>Manage galleries, uploads, visitors and purchases.</p>
+    </section>
+
+    <!-- EXISTING BUTTONS (UNCHANGED IDS) -->
+    <section class="admin-actions">
+      <button class="admin-primary-button" type="button" id="showGalleriesBtn">Galleries</button>
+      <button class="admin-secondary-button" type="button" id="showVisitorsBtn">Visitors</button>
+      <button class="admin-secondary-button" type="button" id="showOrdersBtn">Purchases</button>
+    </section>
+
+    <!-- DO NOT TOUCH -->
+    <section id="adminGalleryList"></section>
+
+  </main>
+
+  <footer class="footer">
+    <p>© 2026 MadPix Admin</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="data.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>
