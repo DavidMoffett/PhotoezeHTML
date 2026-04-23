@@ -1,11 +1,3 @@
-// MadPix Admin - locked function base with safe gallery delete
-// hard-wired core tables: pe_galleries + pe_photos
-// schema-tolerant for pe_photos without file_path
-// pe_photos requires code NOT NULL
-// real upload status text, no fake progress bar
-// top stats zero by default on failure
-// card display uses picture title/number, never Supabase code
-
 (function () {
   "use strict";
 
@@ -21,6 +13,16 @@
   let currentGalleryId = null;
   let currentGalleryName = "";
   let isUploading = false;
+
+  function setActiveTab(tabName) {
+    if (galleriesBtn) galleriesBtn.classList.remove("admin-nav-btn-active");
+    if (visitorsBtn) visitorsBtn.classList.remove("admin-nav-btn-active");
+    if (ordersBtn) ordersBtn.classList.remove("admin-nav-btn-active");
+
+    if (tabName === "galleries" && galleriesBtn) galleriesBtn.classList.add("admin-nav-btn-active");
+    if (tabName === "visitors" && visitorsBtn) visitorsBtn.classList.add("admin-nav-btn-active");
+    if (tabName === "orders" && ordersBtn) ordersBtn.classList.add("admin-nav-btn-active");
+  }
 
   function setOutput(html) {
     if (!output) {
@@ -41,8 +43,9 @@
 
   function showLoading(message) {
     setOutput(`
-      <div style="padding:12px;margin-top:12px;">
-        <div>${escapeHtml(message)}</div>
+      <div class="admin-message-card">
+        <div class="admin-message-title">Loading</div>
+        <div class="admin-message-text">${escapeHtml(message)}</div>
       </div>
     `);
   }
@@ -50,24 +53,35 @@
   function showError(message, error) {
     console.error(message, error || "");
     setOutput(`
-      <div style="padding:12px;border:1px solid #cc0000;margin-top:12px;">
-        <strong>Admin error</strong>
-        <div style="margin-top:8px;">${escapeHtml(message)}</div>
+      <div class="admin-message-card admin-error-card">
+        <div class="admin-message-title">Admin error</div>
+        <div class="admin-message-text">${escapeHtml(message)}</div>
       </div>
     `);
   }
 
   function showUploadStatus(galleryName, currentIndex, totalFiles, fileName, completedCount) {
+    const percent = totalFiles > 0 ? Math.round((completedCount / totalFiles) * 100) : 0;
+
     setOutput(`
-      <div style="margin-top:12px;">
-        <div style="padding:16px;border:1px solid #d1d5db;border-radius:12px;background:#ffffff;">
-          <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Uploading Photos</div>
-          <div style="margin-bottom:8px;">Gallery: <strong>${escapeHtml(galleryName || "Gallery")}</strong></div>
-          <div style="margin-bottom:8px;">Uploading ${escapeHtml(String(currentIndex))} of ${escapeHtml(String(totalFiles))}</div>
-          <div style="margin-bottom:8px;">Current file: ${escapeHtml(fileName || "")}</div>
-          <div style="margin-bottom:8px;">Completed: ${escapeHtml(String(completedCount))} of ${escapeHtml(String(totalFiles))}</div>
-          <div style="margin-top:12px;color:#6b7280;">Do not close this page while upload is running.</div>
+      <div class="admin-message-card">
+        <div class="admin-message-title">Uploading Photos</div>
+        <div class="admin-message-stack">
+          <div><strong>Gallery:</strong> ${escapeHtml(galleryName || "Gallery")}</div>
+          <div><strong>Uploading:</strong> ${escapeHtml(String(currentIndex))} of ${escapeHtml(String(totalFiles))}</div>
+          <div><strong>Current file:</strong> ${escapeHtml(fileName || "")}</div>
+          <div><strong>Completed:</strong> ${escapeHtml(String(completedCount))} of ${escapeHtml(String(totalFiles))}</div>
         </div>
+        <div class="upload-progress-wrap">
+          <div class="upload-progress-label">
+            <span>Progress</span>
+            <span>${escapeHtml(String(percent))}%</span>
+          </div>
+          <div class="upload-progress-bar">
+            <div class="upload-progress-fill" style="width:${percent}%;"></div>
+          </div>
+        </div>
+        <div class="admin-muted-note">Do not close this page while upload is running.</div>
       </div>
     `);
   }
@@ -84,7 +98,7 @@
 
   function formatMoney(value) {
     const amount = Number(value || 0);
-    return `$${amount.toFixed(2)}`;
+    return `NZ$${amount.toFixed(2)}`;
   }
 
   function slugify(value) {
@@ -117,6 +131,10 @@
     );
   }
 
+  function getPreviewUrl(photo) {
+    return photo.preview_url || photo.image_url || "";
+  }
+
   function cleanPhotoNumber(photo) {
     const raw =
       photo.title ||
@@ -125,6 +143,7 @@
       photo.filename ||
       photo.original_name ||
       photo.image_name ||
+      photo.preview_url ||
       photo.image_url ||
       "";
 
@@ -132,6 +151,7 @@
     return lastPart
       .replace(/\.[^.]+$/, "")
       .replace(/[-_]?result$/i, "")
+      .replace(/-preview$/i, "")
       .trim();
   }
 
@@ -160,20 +180,20 @@
 
   function extractSupabaseAnonKey(source) {
     return firstMatch(source, [
-      /(?:SUPABASE_ANON_KEY|SUPABASE_KEY|MADPIX_SUPABASE_ANON_KEY|APP_SUPABASE_ANON_KEY)\s*[:=]\s*["'`]([^"'`]+)["'`]/i,
+      /(?:SUPABASE_ANON_KEY|SUPABASE_KEY|MADPIX_SUPABASE_ANON_KEY|APP_SUPABASE_ANON_KEY|PHOTOEZE_SUPABASE_ANON_KEY)\s*[:=]\s*["'`]([^"'`]+)["'`]/i,
       /["'`](eyJ[A-Za-z0-9._-]{40,})["'`]/i
     ]);
   }
 
   function extractBucketName(source) {
     return firstMatch(source, [
-      /(?:SUPABASE_BUCKET|MADPIX_BUCKET|APP_BUCKET|bucket)\s*[:=]\s*["'`]([^"'`]+)["'`]/i
+      /(?:SUPABASE_BUCKET|MADPIX_BUCKET|PHOTOEZE_BUCKET|APP_BUCKET|bucket)\s*[:=]\s*["'`]([^"'`]+)["'`]/i
     ]) || "photos";
   }
 
   async function getRuntimeConfig() {
-    if (window.__madpixRuntimeConfig) {
-      return window.__madpixRuntimeConfig;
+    if (window.__photoezeRuntimeConfig) {
+      return window.__photoezeRuntimeConfig;
     }
 
     const source = await readDataJsText();
@@ -184,13 +204,13 @@
       bucket: extractBucketName(source)
     };
 
-    window.__madpixRuntimeConfig = config;
+    window.__photoezeRuntimeConfig = config;
     return config;
   }
 
   async function getSupabaseClient() {
-    if (window.__madpixAdminSupabase) {
-      return window.__madpixAdminSupabase;
+    if (window.__photoezeAdminSupabase) {
+      return window.__photoezeAdminSupabase;
     }
 
     if (!window.supabase || typeof window.supabase.createClient !== "function") {
@@ -207,8 +227,8 @@
       throw new Error("Supabase anon key not found in data.js.");
     }
 
-    window.__madpixAdminSupabase = window.supabase.createClient(config.url, config.key);
-    return window.__madpixAdminSupabase;
+    window.__photoezeAdminSupabase = window.supabase.createClient(config.url, config.key);
+    return window.__photoezeAdminSupabase;
   }
 
   async function getBucketName() {
@@ -319,12 +339,13 @@
       console.error("Could not refresh stats.", error);
       if (statVisits) statVisits.textContent = "0";
       if (statPurchases) statPurchases.textContent = "0";
-      if (statRevenue) statRevenue.textContent = "$0.00";
+      if (statRevenue) statRevenue.textContent = "NZ$0.00";
     }
   }
 
   async function loadGalleries() {
     try {
+      setActiveTab("galleries");
       showLoading("Loading galleries...");
       const sb = await getSupabaseClient();
 
@@ -339,10 +360,15 @@
 
       if (!galleries.length) {
         setOutput(`
-          <div style="padding:12px;margin-top:12px;">
-            <div>No galleries found.</div>
-            <div style="margin-top:12px;">
-              <button type="button" id="createGalleryBtn">Create Gallery</button>
+          <div class="admin-page-block">
+            <div class="admin-block-header">
+              <div>
+                <h2>Galleries</h2>
+                <p>No galleries found yet.</p>
+              </div>
+              <div>
+                <button type="button" id="createGalleryBtn" class="admin-btn admin-btn-primary">Create Gallery</button>
+              </div>
             </div>
           </div>
         `);
@@ -350,20 +376,34 @@
       }
 
       setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:12px;">
-            <button type="button" id="createGalleryBtn">Create Gallery</button>
-          </div>
-          ${galleries.map((gallery) => `
-            <div style="padding:10px 0;border-bottom:1px solid #ddd;">
-              <div><strong>${escapeHtml(getGalleryName(gallery))}</strong></div>
-              <div style="margin-top:8px;">
-                <button type="button" class="openGalleryBtn" data-gallery-id="${escapeHtml(gallery.id)}">
-                  Open Gallery
-                </button>
-              </div>
+        <div class="admin-page-block">
+          <div class="admin-block-header">
+            <div>
+              <h2>Galleries</h2>
+              <p>Manage and open existing galleries.</p>
             </div>
-          `).join("")}
+            <div>
+              <button type="button" id="createGalleryBtn" class="admin-btn admin-btn-primary">Create Gallery</button>
+            </div>
+          </div>
+
+          <div class="admin-gallery-list">
+            ${galleries.map((gallery) => `
+              <div class="admin-gallery-row">
+                <div class="admin-gallery-row-main">
+                  <div class="admin-gallery-row-title">${escapeHtml(getGalleryName(gallery))}</div>
+                  <div class="admin-gallery-row-meta">
+                    <span>${gallery.is_live ? "Live" : "Draft"}</span>
+                  </div>
+                </div>
+                <div class="admin-gallery-row-actions">
+                  <button type="button" class="admin-btn admin-btn-secondary openGalleryBtn" data-gallery-id="${escapeHtml(gallery.id)}">
+                    Open Gallery
+                  </button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
         </div>
       `);
     } catch (error) {
@@ -373,36 +413,51 @@
 
   async function loadVisitors() {
     try {
+      setActiveTab("visitors");
       showLoading("Loading visitors...");
       const result = await queryVisitorTable();
       const data = result.data || [];
 
       if (!data.length) {
-        setOutput(`<div style="padding:12px;margin-top:12px;">No visitor records found.</div>`);
+        setOutput(`
+          <div class="admin-page-block">
+            <div class="admin-block-header">
+              <div>
+                <h2>Visitors</h2>
+                <p>No visitor records found.</p>
+              </div>
+            </div>
+          </div>
+        `);
         return;
       }
 
       setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:12px;"><strong>Visitors</strong></div>
-          <div style="margin-bottom:12px;font-size:12px;opacity:0.7;">Source table: ${escapeHtml(result.tableName)}</div>
-          <div style="overflow:auto;">
-            <table style="width:100%;border-collapse:collapse;">
+        <div class="admin-page-block">
+          <div class="admin-block-header">
+            <div>
+              <h2>Visitors</h2>
+              <p>Source table: ${escapeHtml(result.tableName)}</p>
+            </div>
+          </div>
+
+          <div class="admin-table-wrap">
+            <table class="admin-table">
               <thead>
                 <tr>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">When</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Gallery</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Visitor</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Source</th>
+                  <th>When</th>
+                  <th>Gallery</th>
+                  <th>Visitor</th>
+                  <th>Source</th>
                 </tr>
               </thead>
               <tbody>
                 ${data.map((row) => `
                   <tr>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.created_at || row.visited_at || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.gallery_id || row.gallery_name || row.gallery_slug || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.email || row.name || row.visitor_id || row.ip || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.referrer || row.source || "")}</td>
+                    <td>${escapeHtml(row.created_at || row.visited_at || "")}</td>
+                    <td>${escapeHtml(row.gallery_id || row.gallery_name || row.gallery_slug || "")}</td>
+                    <td>${escapeHtml(row.email || row.name || row.visitor_id || row.ip || "")}</td>
+                    <td>${escapeHtml(row.referrer || row.source || "")}</td>
                   </tr>
                 `).join("")}
               </tbody>
@@ -417,34 +472,49 @@
 
   async function loadOrders() {
     try {
+      setActiveTab("orders");
       showLoading("Loading purchases...");
       const result = await queryOrdersTable();
       const data = result.data || [];
 
       if (!data.length) {
-        setOutput(`<div style="padding:12px;margin-top:12px;">No purchase records found.</div>`);
+        setOutput(`
+          <div class="admin-page-block">
+            <div class="admin-block-header">
+              <div>
+                <h2>Orders</h2>
+                <p>No purchase records found.</p>
+              </div>
+            </div>
+          </div>
+        `);
         return;
       }
 
       setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:12px;"><strong>Purchases</strong></div>
-          <div style="margin-bottom:12px;font-size:12px;opacity:0.7;">Source table: ${escapeHtml(result.tableName)}</div>
-          <div style="overflow:auto;">
-            <table style="width:100%;border-collapse:collapse;">
+        <div class="admin-page-block">
+          <div class="admin-block-header">
+            <div>
+              <h2>Orders</h2>
+              <p>Source table: ${escapeHtml(result.tableName)}</p>
+            </div>
+          </div>
+
+          <div class="admin-table-wrap">
+            <table class="admin-table">
               <thead>
                 <tr>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">When</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Buyer</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Total</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Status</th>
+                  <th>When</th>
+                  <th>Buyer</th>
+                  <th>Total</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 ${data.map((row) => `
                   <tr>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.created_at || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">
+                    <td>${escapeHtml(row.created_at || "")}</td>
+                    <td>
                       ${escapeHtml(
                         row.customer_email ||
                         row.customer_name ||
@@ -455,7 +525,7 @@
                         ""
                       )}
                     </td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">
+                    <td>
                       ${escapeHtml(
                         formatMoney(
                           row.total ||
@@ -467,7 +537,7 @@
                         )
                       )}
                     </td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">
+                    <td>
                       ${escapeHtml(
                         row.payment_status ||
                         row.status ||
@@ -489,6 +559,7 @@
 
   async function openGallery(galleryId) {
     try {
+      setActiveTab("galleries");
       currentGalleryId = galleryId;
       showLoading("Loading gallery...");
       const sb = await getSupabaseClient();
@@ -525,77 +596,71 @@
       const liveCount = photoList.filter((photo) => !!photo.is_live).length;
 
       setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:16px;">
-            <button type="button" id="backToGalleriesBtn" ${isUploading ? "disabled" : ""}>Back to Galleries</button>
-            <button type="button" id="uploadPhotosBtn" style="margin-left:8px;" ${isUploading ? "disabled" : ""}>Upload Photos</button>
-            <button type="button" id="deleteGalleryBtn" data-gallery-id="${escapeHtml(galleryId)}" data-gallery-name="${escapeHtml(title)}" style="margin-left:8px;" ${isUploading ? "disabled" : ""}>Delete Gallery</button>
-            <input type="file" id="photoUploadInput" multiple style="display:none;" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""} />
-          </div>
-
-          <div style="padding:18px;border-bottom:1px solid #ddd;">
-            <h3 style="margin-bottom:12px;">${escapeHtml(title)}</h3>
-
-            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:14px;">
-              <div style="min-width:220px;flex:0 1 260px;">
-                <label style="display:block;margin-bottom:6px;">Gallery Price</label>
-                <input type="number" step="0.01" id="galleryPriceInput" value="${escapeHtml(galleryPrice)}" ${isUploading ? "disabled" : ""}>
-              </div>
-              <div>
-                <button type="button" id="saveGalleryPriceBtn" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>
-                  Save Gallery Price
-                </button>
-              </div>
+        <div class="admin-page-block">
+          <div class="admin-block-header">
+            <div>
+              <h2>${escapeHtml(title)}</h2>
+              <p>${escapeHtml(String(liveCount))} of ${escapeHtml(String(photoList.length))} live</p>
             </div>
 
-            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
-              <button type="button" id="makeGalleryLiveBtn" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>
-                Make Gallery Live
-              </button>
-              <button type="button" id="makeGalleryDraftBtn" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>
-                Make Gallery Draft
-              </button>
-              <div style="font-size:14px;color:#6b7280;">
-                ${escapeHtml(String(liveCount))} of ${escapeHtml(String(photoList.length))} live
+            <div class="admin-header-actions">
+              <button type="button" id="backToGalleriesBtn" class="admin-btn admin-btn-secondary" ${isUploading ? "disabled" : ""}>Back to Galleries</button>
+              <button type="button" id="uploadPhotosBtn" class="admin-btn admin-btn-primary" ${isUploading ? "disabled" : ""}>Upload Photos</button>
+              <button type="button" id="deleteGalleryBtn" class="admin-btn admin-btn-danger" data-gallery-id="${escapeHtml(galleryId)}" data-gallery-name="${escapeHtml(title)}" ${isUploading ? "disabled" : ""}>Delete Gallery</button>
+              <input type="file" id="photoUploadInput" multiple style="display:none;" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""} />
+            </div>
+          </div>
+
+          <div class="admin-settings-row">
+            <div class="admin-settings-card">
+              <label for="galleryPriceInput">Gallery Price</label>
+              <input type="number" step="0.01" id="galleryPriceInput" value="${escapeHtml(galleryPrice)}" ${isUploading ? "disabled" : ""} />
+              <button type="button" id="saveGalleryPriceBtn" class="admin-btn admin-btn-primary" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>Save Gallery Price</button>
+            </div>
+
+            <div class="admin-settings-card">
+              <div class="admin-settings-actions">
+                <button type="button" id="makeGalleryLiveBtn" class="admin-btn admin-btn-primary" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>Make Gallery Live</button>
+                <button type="button" id="makeGalleryDraftBtn" class="admin-btn admin-btn-secondary" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>Make Gallery Draft</button>
               </div>
             </div>
           </div>
 
           ${
             !photoList.length
-              ? `<div style="padding:18px 0;">No photos in this gallery yet.</div>`
+              ? `<div class="admin-empty-state">No photos in this gallery yet.</div>`
               : `
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:18px;">
+                <div class="admin-photo-grid">
                   ${photoList.map((photo) => {
                     const photoNumber = cleanPhotoNumber(photo);
+                    const previewUrl = getPreviewUrl(photo);
+
                     return `
-                      <div style="padding:14px;border:1px solid #e5e7eb;border-radius:18px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,0.05);">
-                        <div style="margin-bottom:10px;">
+                      <div class="admin-photo-card">
+                        <div class="admin-photo-thumb">
                           ${
-                            photo.image_url
-                              ? `<img src="${escapeHtml(photo.image_url)}" alt="" style="width:100%;height:180px;object-fit:cover;border-radius:14px;">`
-                              : `<div style="height:180px;border-radius:14px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;">No image</div>`
+                            previewUrl
+                              ? `<img src="${escapeHtml(previewUrl)}" alt="">`
+                              : `<div class="admin-no-image">No image</div>`
                           }
                         </div>
 
-                        <div style="font-size:24px;font-weight:800;line-height:1.1;margin-bottom:12px;color:#111827;">
-                          ${escapeHtml(photoNumber || "Photo")}
-                        </div>
+                        <div class="admin-photo-body">
+                          <div class="admin-photo-title">${escapeHtml(photoNumber || "Photo")}</div>
 
-                        <div style="margin-bottom:10px;">
-                          <label style="display:block;margin-bottom:6px;">Sort Order</label>
-                          <input
-                            type="number"
-                            class="photoSortInput"
-                            data-photo-id="${escapeHtml(photo.id)}"
-                            data-gallery-id="${escapeHtml(galleryId)}"
-                            value="${escapeHtml(photo.sort_order || "")}"
-                            ${isUploading ? "disabled" : ""}
-                          >
-                        </div>
+                          <div class="admin-field-group">
+                            <label>Sort Order</label>
+                            <input
+                              type="number"
+                              class="photoSortInput"
+                              data-photo-id="${escapeHtml(photo.id)}"
+                              data-gallery-id="${escapeHtml(galleryId)}"
+                              value="${escapeHtml(photo.sort_order || "")}"
+                              ${isUploading ? "disabled" : ""}
+                            />
+                          </div>
 
-                        <div style="margin-bottom:4px;">
-                          <label>
+                          <label class="admin-checkbox-row">
                             <input
                               type="checkbox"
                               class="photoLiveInput"
@@ -603,8 +668,8 @@
                               data-gallery-id="${escapeHtml(galleryId)}"
                               ${photo.is_live ? "checked" : ""}
                               ${isUploading ? "disabled" : ""}
-                            >
-                            Live
+                            />
+                            <span>Live</span>
                           </label>
                         </div>
                       </div>
@@ -622,20 +687,21 @@
 
   function showCreateGalleryForm() {
     setOutput(`
-      <div style="margin-top:12px;">
-        <div style="margin-bottom:12px;">
-          <button type="button" id="backToGalleriesBtn">Back to Galleries</button>
+      <div class="admin-page-block admin-form-block">
+        <div class="admin-block-header">
+          <div>
+            <h2>Create Gallery</h2>
+            <p>Create a new gallery.</p>
+          </div>
+          <div>
+            <button type="button" id="backToGalleriesBtn" class="admin-btn admin-btn-secondary">Back to Galleries</button>
+          </div>
         </div>
 
-        <h3>Create Gallery</h3>
-
-        <div style="margin-bottom:12px;">
-          <label style="display:block;margin-bottom:6px;">Gallery Name</label>
-          <input type="text" id="newGalleryName">
-        </div>
-
-        <div>
-          <button type="button" id="saveNewGalleryBtn">Create Gallery</button>
+        <div class="admin-settings-card">
+          <label for="newGalleryName">Gallery Name</label>
+          <input type="text" id="newGalleryName" />
+          <button type="button" id="saveNewGalleryBtn" class="admin-btn admin-btn-primary">Create Gallery</button>
         </div>
       </div>
     `);
@@ -722,6 +788,8 @@
           code: uniquePhotoCode(galleryId, file.name, i),
           title: cleanedTitle,
           image_url: publicData.publicUrl,
+          preview_url: publicData.publicUrl,
+          original_url: publicData.publicUrl,
           is_live: true
         };
 
@@ -841,9 +909,16 @@
       if (photosReadError) throw photosReadError;
 
       const photoRows = Array.isArray(photos) ? photos : [];
-      const filePaths = photoRows
-        .map((row) => extractStoragePathFromPublicUrl(row.image_url, bucketName))
-        .filter((path) => typeof path === "string" && path.trim() !== "");
+      const filePaths = photoRows.flatMap((row) => {
+        const paths = [];
+        const previewPath = extractStoragePathFromPublicUrl(row.preview_url || row.image_url, bucketName);
+        const originalPath = extractStoragePathFromPublicUrl(row.original_url || row.image_url, bucketName);
+
+        if (previewPath) paths.push(previewPath);
+        if (originalPath && originalPath !== previewPath) paths.push(originalPath);
+
+        return paths;
+      });
 
       if (filePaths.length > 0) {
         const { error: storageRemoveError } = await sb.storage
@@ -1034,8 +1109,9 @@
 
   if (statVisits) statVisits.textContent = "0";
   if (statPurchases) statPurchases.textContent = "0";
-  if (statRevenue) statRevenue.textContent = "$0.00";
+  if (statRevenue) statRevenue.textContent = "NZ$0.00";
 
   refreshStats();
-  console.log("MadPix admin ready");
+  loadGalleries();
+  console.log("Photoeze admin ready");
 })();
