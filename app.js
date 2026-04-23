@@ -3,7 +3,8 @@
 
   const app = document.getElementById("app");
 
-  const STORAGE_KEY = "madpix_selected_photos_v1";
+  const STORAGE_KEY_IDS = "madpix_selected_photos_v1";
+  const STORAGE_KEY_ITEMS = "madpix_selected_items_v2";
 
   const state = {
     galleries: [],
@@ -70,9 +71,9 @@
     return window.__madpixPublicSupabase;
   }
 
-  function loadSavedSelection() {
+  function loadSavedSelectionIds() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(STORAGE_KEY_IDS);
       if (!raw) return new Set();
 
       const parsed = JSON.parse(raw);
@@ -85,12 +86,42 @@
     }
   }
 
+  function getGalleryInferredPrice() {
+    const pricedPhoto = state.photos.find((photo) => Number(photo.price || 0) > 0);
+    return pricedPhoto ? Number(pricedPhoto.price || 0) : 0;
+  }
+
+  function getEffectivePhotoPrice(photo) {
+    const directPrice = Number(photo.price || 0);
+    if (directPrice > 0) return directPrice;
+
+    const galleryPrice = getGalleryInferredPrice();
+    return galleryPrice > 0 ? galleryPrice : 0;
+  }
+
+  function getSelectedPhotos() {
+    return state.photos
+      .filter((photo) => state.selectedPhotoIds.has(String(photo.id)))
+      .map((photo) => ({
+        ...photo,
+        effective_price: getEffectivePhotoPrice(photo)
+      }));
+  }
+
   function persistSelection() {
     try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(Array.from(state.selectedPhotoIds))
-      );
+      const ids = Array.from(state.selectedPhotoIds);
+      localStorage.setItem(STORAGE_KEY_IDS, JSON.stringify(ids));
+
+      const selectedItems = getSelectedPhotos().map((photo) => ({
+        id: String(photo.id),
+        gallery_id: String(photo.gallery_id || state.selectedGalleryId || ""),
+        title: cleanPhotoLabel(photo),
+        image_url: photo.image_url || "",
+        price: Number(photo.effective_price || 0)
+      }));
+
+      localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(selectedItems));
     } catch (error) {
       console.error("Failed to save selection", error);
     }
@@ -128,12 +159,8 @@
     return state.galleries.find((gallery) => String(gallery.id) === String(state.selectedGalleryId)) || null;
   }
 
-  function getSelectedPhotos() {
-    return state.photos.filter((photo) => state.selectedPhotoIds.has(String(photo.id)));
-  }
-
   function getCartTotal() {
-    return getSelectedPhotos().reduce((sum, photo) => sum + Number(photo.price || 0), 0);
+    return getSelectedPhotos().reduce((sum, photo) => sum + Number(photo.effective_price || 0), 0);
   }
 
   function getPhotoIndexById(photoId) {
@@ -146,6 +173,10 @@
 
   function togglePhoto(photoId) {
     const key = String(photoId);
+    const photo = state.photos.find((item) => String(item.id) === key);
+
+    if (!photo) return;
+    if (getEffectivePhotoPrice(photo) <= 0) return;
 
     if (state.selectedPhotoIds.has(key)) {
       state.selectedPhotoIds.delete(key);
@@ -230,6 +261,41 @@
     renderPage();
   }
 
+  function handleAdminAccess() {
+    const secondWord = window.prompt("Second word?");
+    if (secondWord === null) return;
+
+    if (secondWord.trim().toLowerCase() === "twende sasa") {
+      window.location.href = "admin.html";
+      return;
+    }
+
+    alert("Wrong second word.");
+  }
+
+  function renderTopActions() {
+    return `
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+        <button
+          type="button"
+          id="adminAccessBtn"
+          style="
+            padding:8px 12px;
+            border:1px solid #d1d5db;
+            background:#ffffff;
+            color:#111827;
+            border-radius:10px;
+            cursor:pointer;
+            font-size:12px;
+            font-weight:600;
+          "
+        >
+          Admin Access
+        </button>
+      </div>
+    `;
+  }
+
   function renderGallerySelector() {
     return `
       <div style="margin-bottom:18px;">
@@ -266,8 +332,7 @@
   }
 
   function renderStickyCheckoutBar() {
-    const selectedPhotos = getSelectedPhotos();
-    const count = selectedPhotos.length;
+    const count = getSelectedPhotos().length;
     const total = getCartTotal();
     const disabled = count === 0;
 
@@ -346,8 +411,8 @@
           .map((photo) => {
             const label = cleanPhotoLabel(photo);
             const isSelected = state.selectedPhotoIds.has(String(photo.id));
-            const price = Number(photo.price || 0);
-            const canBuy = price > 0;
+            const effectivePrice = getEffectivePhotoPrice(photo);
+            const canBuy = effectivePrice > 0;
 
             return `
               <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#ffffff;">
@@ -368,29 +433,10 @@
                   ${escapeHtml(label)}
                 </div>
 
-                <div style="margin-top:4px;font-size:13px;font-weight:600;color:#6b7280;">
-                  ${canBuy ? formatMoney(price) : "Price unavailable"}
-                </div>
-
-                <div style="margin-top:10px;display:flex;gap:8px;">
-                  <button
-                    type="button"
-                    class="photo-open-btn"
-                    data-photo-id="${escapeHtml(photo.id)}"
-                    style="
-                      flex:1;
-                      padding:9px 10px;
-                      border:1px solid #d1d5db;
-                      background:#ffffff;
-                      color:#111827;
-                      border-radius:10px;
-                      cursor:pointer;
-                      font-size:13px;
-                      font-weight:600;
-                    "
-                  >
-                    View
-                  </button>
+                <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                  <div style="font-size:12px;font-weight:600;color:#6b7280;">
+                    ${canBuy ? formatMoney(effectivePrice) : "Price unavailable"}
+                  </div>
 
                   <button
                     type="button"
@@ -398,8 +444,7 @@
                     data-photo-id="${escapeHtml(photo.id)}"
                     ${canBuy ? "" : "disabled"}
                     style="
-                      flex:1;
-                      padding:9px 10px;
+                      padding:8px 12px;
                       border:1px solid ${isSelected ? "#111827" : "#d1d5db"};
                       background:${isSelected ? "#111827" : "#ffffff"};
                       color:${isSelected ? "#ffffff" : "#111827"};
@@ -408,6 +453,7 @@
                       opacity:${canBuy ? "1" : "0.5"};
                       font-size:13px;
                       font-weight:600;
+                      white-space:nowrap;
                     "
                   >
                     ${isSelected ? "Selected" : "Select"}
@@ -454,27 +500,6 @@
             padding:18px;
           "
         >
-          <button
-            type="button"
-            id="closeLightboxBtn"
-            style="
-              position:absolute;
-              top:12px;
-              right:12px;
-              width:40px;
-              height:40px;
-              border:none;
-              border-radius:999px;
-              background:rgba(255,255,255,0.12);
-              color:#ffffff;
-              cursor:pointer;
-              font-size:20px;
-              font-weight:700;
-            "
-          >
-            ×
-          </button>
-
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;color:#ffffff;">
             <div>
               <div style="font-size:20px;font-weight:700;">${escapeHtml(label)}</div>
@@ -482,6 +507,23 @@
             </div>
 
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button
+                type="button"
+                id="backToGalleryBtn"
+                style="
+                  padding:8px 12px;
+                  border:1px solid rgba(255,255,255,0.18);
+                  background:transparent;
+                  color:#ffffff;
+                  border-radius:10px;
+                  cursor:pointer;
+                  font-size:13px;
+                  font-weight:600;
+                "
+              >
+                Back to Gallery
+              </button>
+
               <button
                 type="button"
                 id="prevPhotoBtn"
@@ -556,6 +598,7 @@
 
     return `
       <div style="padding:20px;">
+        ${renderTopActions()}
         ${renderGallerySelector()}
 
         <div style="margin-bottom:14px;">
@@ -589,6 +632,13 @@
       });
     });
 
+    const adminAccessBtn = document.getElementById("adminAccessBtn");
+    if (adminAccessBtn) {
+      adminAccessBtn.addEventListener("click", function () {
+        handleAdminAccess();
+      });
+    }
+
     const clearSelectionBtn = document.getElementById("clearSelectionBtn");
     if (clearSelectionBtn) {
       clearSelectionBtn.addEventListener("click", function () {
@@ -604,9 +654,9 @@
       });
     }
 
-    const closeLightboxBtn = document.getElementById("closeLightboxBtn");
-    if (closeLightboxBtn) {
-      closeLightboxBtn.addEventListener("click", function () {
+    const backToGalleryBtn = document.getElementById("backToGalleryBtn");
+    if (backToGalleryBtn) {
+      backToGalleryBtn.addEventListener("click", function () {
         closeLightbox();
       });
     }
@@ -676,7 +726,7 @@
   async function init() {
     try {
       show("Loading galleries...");
-      state.selectedPhotoIds = loadSavedSelection();
+      state.selectedPhotoIds = loadSavedSelectionIds();
       state.galleries = await loadGalleries();
 
       if (!state.galleries.length) {
