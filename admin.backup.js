@@ -1,10 +1,5 @@
-// MadPix Admin - locked function base with safe gallery delete
-// hard-wired core tables: pe_galleries + pe_photos
-// schema-tolerant for pe_photos without file_path
-// pe_photos requires code NOT NULL
-// real upload status text, no fake progress bar
-// top stats zero by default on failure
-// card display uses picture title/number, never Supabase code
+// MadPix Admin - locked function base with hard-wired tables
+// pe_galleries + pe_photos only
 
 (function () {
   "use strict";
@@ -17,10 +12,6 @@
   const statVisits = document.getElementById("statVisits");
   const statPurchases = document.getElementById("statPurchases");
   const statRevenue = document.getElementById("statRevenue");
-
-  let currentGalleryId = null;
-  let currentGalleryName = "";
-  let isUploading = false;
 
   function setOutput(html) {
     if (!output) {
@@ -40,11 +31,7 @@
   }
 
   function showLoading(message) {
-    setOutput(`
-      <div style="padding:12px;margin-top:12px;">
-        <div>${escapeHtml(message)}</div>
-      </div>
-    `);
+    setOutput(`<div style="padding:12px;margin-top:12px;">${escapeHtml(message)}</div>`);
   }
 
   function showError(message, error) {
@@ -53,21 +40,6 @@
       <div style="padding:12px;border:1px solid #cc0000;margin-top:12px;">
         <strong>Admin error</strong>
         <div style="margin-top:8px;">${escapeHtml(message)}</div>
-      </div>
-    `);
-  }
-
-  function showUploadStatus(galleryName, currentIndex, totalFiles, fileName, completedCount) {
-    setOutput(`
-      <div style="margin-top:12px;">
-        <div style="padding:16px;border:1px solid #d1d5db;border-radius:12px;background:#ffffff;">
-          <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Uploading Photos</div>
-          <div style="margin-bottom:8px;">Gallery: <strong>${escapeHtml(galleryName || "Gallery")}</strong></div>
-          <div style="margin-bottom:8px;">Uploading ${escapeHtml(String(currentIndex))} of ${escapeHtml(String(totalFiles))}</div>
-          <div style="margin-bottom:8px;">Current file: ${escapeHtml(fileName || "")}</div>
-          <div style="margin-bottom:8px;">Completed: ${escapeHtml(String(completedCount))} of ${escapeHtml(String(totalFiles))}</div>
-          <div style="margin-top:12px;color:#6b7280;">Do not close this page while upload is running.</div>
-        </div>
       </div>
     `);
   }
@@ -87,44 +59,23 @@
     return `$${amount.toFixed(2)}`;
   }
 
-  function slugify(value) {
-    return String(value || "")
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  }
-
-  function uniquePhotoCode(galleryId, fileName, index) {
-    const baseName = String(fileName || "")
-      .replace(/\.[^.]+$/, "")
-      .replace(/[-_]?result$/i, "")
-      .trim();
-
-    const galleryPart = slugify(galleryId);
-    const filePart = slugify(baseName) || `photo-${index + 1}`;
-    return `${galleryPart}-${filePart}-${Date.now()}-${index + 1}`;
-  }
-
   function getGalleryName(gallery) {
     return (
-      gallery.title ||
       gallery.name ||
-      gallery.code ||
-      gallery.slug ||
+      gallery.title ||
       gallery.gallery_name ||
+      gallery.slug ||
       `Gallery ${gallery.id}`
     );
   }
 
   function cleanPhotoNumber(photo) {
     const raw =
-      photo.title ||
-      photo.name ||
       photo.file_name ||
       photo.filename ||
-      photo.original_name ||
-      photo.image_name ||
+      photo.name ||
+      photo.title ||
+      photo.file_path ||
       photo.image_url ||
       "";
 
@@ -216,23 +167,6 @@
     return config.bucket || "photos";
   }
 
-  function extractStoragePathFromPublicUrl(url, bucketName) {
-    if (!url || !bucketName) return "";
-
-    try {
-      const parsed = new URL(url);
-      const marker = `/storage/v1/object/public/${bucketName}/`;
-      const idx = parsed.pathname.indexOf(marker);
-
-      if (idx === -1) return "";
-
-      const encodedPath = parsed.pathname.slice(idx + marker.length);
-      return decodeURIComponent(encodedPath);
-    } catch (error) {
-      return "";
-    }
-  }
-
   async function queryVisitorTable() {
     const sb = await getSupabaseClient();
     const tables = ["pe_visits", "pe_visitors", "visitors"];
@@ -317,9 +251,9 @@
       if (statRevenue) statRevenue.textContent = formatMoney(revenue);
     } catch (error) {
       console.error("Could not refresh stats.", error);
-      if (statVisits) statVisits.textContent = "0";
-      if (statPurchases) statPurchases.textContent = "0";
-      if (statRevenue) statRevenue.textContent = "$0.00";
+      if (statVisits) statVisits.textContent = "—";
+      if (statPurchases) statPurchases.textContent = "—";
+      if (statRevenue) statRevenue.textContent = "—";
     }
   }
 
@@ -489,7 +423,6 @@
 
   async function openGallery(galleryId) {
     try {
-      currentGalleryId = galleryId;
       showLoading("Loading gallery...");
       const sb = await getSupabaseClient();
 
@@ -500,8 +433,6 @@
         .single();
 
       if (galleryError) throw galleryError;
-
-      currentGalleryName = getGalleryName(gallery);
 
       const { data: photos, error: photosError } = await sb
         .from("pe_photos")
@@ -521,16 +452,15 @@
         }
       }
 
-      const title = currentGalleryName;
+      const title = getGalleryName(gallery);
       const liveCount = photoList.filter((photo) => !!photo.is_live).length;
 
       setOutput(`
         <div style="margin-top:12px;">
           <div style="margin-bottom:16px;">
-            <button type="button" id="backToGalleriesBtn" ${isUploading ? "disabled" : ""}>Back to Galleries</button>
-            <button type="button" id="uploadPhotosBtn" style="margin-left:8px;" ${isUploading ? "disabled" : ""}>Upload Photos</button>
-            <button type="button" id="deleteGalleryBtn" data-gallery-id="${escapeHtml(galleryId)}" data-gallery-name="${escapeHtml(title)}" style="margin-left:8px;" ${isUploading ? "disabled" : ""}>Delete Gallery</button>
-            <input type="file" id="photoUploadInput" multiple style="display:none;" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""} />
+            <button type="button" id="backToGalleriesBtn">Back to Galleries</button>
+            <button type="button" id="uploadPhotosBtn" style="margin-left:8px;">Upload Photos</button>
+            <input type="file" id="photoUploadInput" multiple style="display:none;" data-gallery-id="${escapeHtml(galleryId)}" />
           </div>
 
           <div style="padding:18px;border-bottom:1px solid #ddd;">
@@ -539,20 +469,20 @@
             <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:14px;">
               <div style="min-width:220px;flex:0 1 260px;">
                 <label style="display:block;margin-bottom:6px;">Gallery Price</label>
-                <input type="number" step="0.01" id="galleryPriceInput" value="${escapeHtml(galleryPrice)}" ${isUploading ? "disabled" : ""}>
+                <input type="number" step="0.01" id="galleryPriceInput" value="${escapeHtml(galleryPrice)}">
               </div>
               <div>
-                <button type="button" id="saveGalleryPriceBtn" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>
+                <button type="button" id="saveGalleryPriceBtn" data-gallery-id="${escapeHtml(galleryId)}">
                   Save Gallery Price
                 </button>
               </div>
             </div>
 
             <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
-              <button type="button" id="makeGalleryLiveBtn" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>
+              <button type="button" id="makeGalleryLiveBtn" data-gallery-id="${escapeHtml(galleryId)}">
                 Make Gallery Live
               </button>
-              <button type="button" id="makeGalleryDraftBtn" data-gallery-id="${escapeHtml(galleryId)}" ${isUploading ? "disabled" : ""}>
+              <button type="button" id="makeGalleryDraftBtn" data-gallery-id="${escapeHtml(galleryId)}">
                 Make Gallery Draft
               </button>
               <div style="font-size:14px;color:#6b7280;">
@@ -590,7 +520,6 @@
                             data-photo-id="${escapeHtml(photo.id)}"
                             data-gallery-id="${escapeHtml(galleryId)}"
                             value="${escapeHtml(photo.sort_order || "")}"
-                            ${isUploading ? "disabled" : ""}
                           >
                         </div>
 
@@ -602,7 +531,6 @@
                               data-photo-id="${escapeHtml(photo.id)}"
                               data-gallery-id="${escapeHtml(galleryId)}"
                               ${photo.is_live ? "checked" : ""}
-                              ${isUploading ? "disabled" : ""}
                             >
                             Live
                           </label>
@@ -655,8 +583,8 @@
       const sb = await getSupabaseClient();
 
       const payload = {
-        title: name,
-        code: slugify(name),
+        name: name,
+        slug: name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
         is_live: false
       };
 
@@ -681,27 +609,14 @@
         return;
       }
 
-      isUploading = true;
-
+      showLoading("Uploading photos...");
       const sb = await getSupabaseClient();
       const bucketName = await getBucketName();
-      const totalFiles = files.length;
-      let completedCount = 0;
 
-      for (let i = 0; i < files.length; i += 1) {
-        const file = files[i];
-
-        showUploadStatus(
-          currentGalleryName,
-          i + 1,
-          totalFiles,
-          file.name,
-          completedCount
-        );
-
+      for (const file of Array.from(files)) {
         const extension = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
         const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
-        const storagePath = `${galleryId}/${fileName}`;
+        const filePath = `${galleryId}/${fileName}`;
         const cleanedTitle = file.name
           .replace(/\.[^.]+$/, "")
           .replace(/[-_]?result$/i, "")
@@ -709,54 +624,30 @@
 
         const { error: uploadError } = await sb.storage
           .from(bucketName)
-          .upload(storagePath, file);
+          .upload(filePath, file);
 
         if (uploadError) throw uploadError;
 
         const { data: publicData } = sb.storage
           .from(bucketName)
-          .getPublicUrl(storagePath);
-
-        const photoPayload = {
-          gallery_id: galleryId,
-          code: uniquePhotoCode(galleryId, file.name, i),
-          title: cleanedTitle,
-          image_url: publicData.publicUrl,
-          is_live: true
-        };
+          .getPublicUrl(filePath);
 
         const { error: insertError } = await sb
           .from("pe_photos")
-          .insert(photoPayload);
+          .insert({
+            gallery_id: galleryId,
+            title: cleanedTitle,
+            image_url: publicData.publicUrl,
+            file_path: filePath,
+            is_live: true
+          });
 
         if (insertError) throw insertError;
-
-        completedCount += 1;
-
-        showUploadStatus(
-          currentGalleryName,
-          Math.min(i + 1, totalFiles),
-          totalFiles,
-          file.name,
-          completedCount
-        );
       }
 
-      const fileInput = document.getElementById("photoUploadInput");
-      if (fileInput) {
-        fileInput.value = "";
-      }
-
-      isUploading = false;
       await openGallery(galleryId);
-
-      try {
-        await refreshStats();
-      } catch (statsError) {
-        console.error("Stats refresh failed after upload.", statsError);
-      }
+      await refreshStats();
     } catch (error) {
-      isUploading = false;
       showError(error.message || "Failed to upload photos.", error);
     }
   }
@@ -813,83 +704,6 @@
     }
   }
 
-  async function deleteGallery(galleryId, galleryName) {
-    const firstConfirm = window.confirm(
-      `Delete gallery "${galleryName}"?\n\nThis will remove the gallery and all of its photos.`
-    );
-
-    if (!firstConfirm) {
-      return;
-    }
-
-    const typed = window.prompt(`Type DELETE to remove "${galleryName}"`);
-
-    if (typed !== "DELETE") {
-      return;
-    }
-
-    try {
-      showLoading(`Deleting gallery "${galleryName}"...`);
-      const sb = await getSupabaseClient();
-      const bucketName = await getBucketName();
-
-      const { data: photos, error: photosReadError } = await sb
-        .from("pe_photos")
-        .select("*")
-        .eq("gallery_id", galleryId);
-
-      if (photosReadError) throw photosReadError;
-
-      const photoRows = Array.isArray(photos) ? photos : [];
-      const filePaths = photoRows
-        .map((row) => extractStoragePathFromPublicUrl(row.image_url, bucketName))
-        .filter((path) => typeof path === "string" && path.trim() !== "");
-
-      if (filePaths.length > 0) {
-        const { error: storageRemoveError } = await sb.storage
-          .from(bucketName)
-          .remove(filePaths);
-
-        if (storageRemoveError) {
-          throw storageRemoveError;
-        }
-      }
-
-      const { error: deletePhotosError } = await sb
-        .from("pe_photos")
-        .delete()
-        .eq("gallery_id", galleryId);
-
-      if (deletePhotosError) throw deletePhotosError;
-
-      const { error: deleteGalleryError } = await sb
-        .from("pe_galleries")
-        .delete()
-        .eq("id", galleryId);
-
-      if (deleteGalleryError) throw deleteGalleryError;
-
-      await refreshStats();
-      await loadGalleries();
-    } catch (error) {
-      const messageText = String(error && error.message ? error.message : error || "");
-
-      if (
-        /foreign key/i.test(messageText) ||
-        /violates/i.test(messageText) ||
-        /constraint/i.test(messageText)
-      ) {
-        showError(
-          `Could not delete "${galleryName}". It may have existing orders linked to its photos.`,
-          error
-        );
-        return;
-      }
-
-      showError(`Failed to delete gallery "${galleryName}".`, error);
-    }
-  }
-
   async function savePhotoAuto(photoId, galleryId) {
     try {
       const sortInput = document.querySelector(`.photoSortInput[data-photo-id="${photoId}"]`);
@@ -933,35 +747,30 @@
   document.addEventListener("click", function (event) {
     const openBtn = event.target.closest(".openGalleryBtn");
     if (openBtn) {
-      if (isUploading) return;
       openGallery(openBtn.getAttribute("data-gallery-id"));
       return;
     }
 
     const backBtn = event.target.closest("#backToGalleriesBtn");
     if (backBtn) {
-      if (isUploading) return;
       loadGalleries();
       return;
     }
 
     const createBtn = event.target.closest("#createGalleryBtn");
     if (createBtn) {
-      if (isUploading) return;
       showCreateGalleryForm();
       return;
     }
 
     const saveNewGalleryBtn = event.target.closest("#saveNewGalleryBtn");
     if (saveNewGalleryBtn) {
-      if (isUploading) return;
       createGallery();
       return;
     }
 
     const uploadBtn = event.target.closest("#uploadPhotosBtn");
     if (uploadBtn) {
-      if (isUploading) return;
       const input = document.getElementById("photoUploadInput");
       if (input) input.click();
       return;
@@ -969,32 +778,19 @@
 
     const saveGalleryPriceBtn = event.target.closest("#saveGalleryPriceBtn");
     if (saveGalleryPriceBtn) {
-      if (isUploading) return;
       saveGalleryPrice(saveGalleryPriceBtn.getAttribute("data-gallery-id"));
       return;
     }
 
     const makeGalleryLiveBtn = event.target.closest("#makeGalleryLiveBtn");
     if (makeGalleryLiveBtn) {
-      if (isUploading) return;
       setGalleryLive(makeGalleryLiveBtn.getAttribute("data-gallery-id"), true);
       return;
     }
 
     const makeGalleryDraftBtn = event.target.closest("#makeGalleryDraftBtn");
     if (makeGalleryDraftBtn) {
-      if (isUploading) return;
       setGalleryLive(makeGalleryDraftBtn.getAttribute("data-gallery-id"), false);
-      return;
-    }
-
-    const deleteGalleryBtn = event.target.closest("#deleteGalleryBtn");
-    if (deleteGalleryBtn) {
-      if (isUploading) return;
-      deleteGallery(
-        deleteGalleryBtn.getAttribute("data-gallery-id"),
-        deleteGalleryBtn.getAttribute("data-gallery-name") || "Gallery"
-      );
       return;
     }
   });
@@ -1002,14 +798,12 @@
   document.addEventListener("change", function (event) {
     const fileInput = event.target.closest("#photoUploadInput");
     if (fileInput) {
-      if (isUploading) return;
       uploadPhotos(fileInput.getAttribute("data-gallery-id"), fileInput.files);
       return;
     }
 
     const liveInput = event.target.closest(".photoLiveInput");
     if (liveInput) {
-      if (isUploading) return;
       savePhotoAuto(
         liveInput.getAttribute("data-photo-id"),
         liveInput.getAttribute("data-gallery-id")
@@ -1022,7 +816,6 @@
     function (event) {
       const sortInput = event.target.closest(".photoSortInput");
       if (sortInput) {
-        if (isUploading) return;
         savePhotoAuto(
           sortInput.getAttribute("data-photo-id"),
           sortInput.getAttribute("data-gallery-id")
@@ -1031,10 +824,6 @@
     },
     true
   );
-
-  if (statVisits) statVisits.textContent = "0";
-  if (statPurchases) statPurchases.textContent = "0";
-  if (statRevenue) statRevenue.textContent = "$0.00";
 
   refreshStats();
   console.log("MadPix admin ready");

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MadPix Checkout</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header">
+    <h1 class="logo">MadPix</h1>
+  </header>
+
+  <main class="container">
+    <div id="checkoutApp"></div>
+  </main>
+
+  <footer class="footer">
+    <p>© 2026 MadPix</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="data.js"></script>
+  <script>
+    (function () {
+      "use strict";
+
+      const STORAGE_KEY = "madpix_selected_photos_v1";
+      const app = document.getElementById("checkoutApp");
+
+      function show(message) {
+        app.innerHTML = `<div style="padding:20px;">${escapeHtml(message)}</div>`;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      function formatMoney(value) {
+        const amount = Number(value || 0);
+        return `NZ$${amount.toFixed(2)}`;
+      }
+
+      function cleanPhotoLabel(photo) {
+        const raw =
+          photo.title ||
+          photo.name ||
+          photo.file_name ||
+          photo.filename ||
+          photo.image_url ||
+          "";
+
+        const lastPart = String(raw).split("/").pop() || "";
+        return lastPart
+          .replace(/\.[^.]+$/, "")
+          .replace(/[-_]?result$/i, "")
+          .trim();
+      }
+
+      function getSupabaseClient() {
+        if (window.__madpixCheckoutSupabase) {
+          return window.__madpixCheckoutSupabase;
+        }
+
+        if (!window.supabase || typeof window.supabase.createClient !== "function") {
+          throw new Error("Supabase library not loaded");
+        }
+
+        if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
+          throw new Error("Missing Supabase config");
+        }
+
+        window.__madpixCheckoutSupabase = window.supabase.createClient(
+          window.SUPABASE_URL,
+          window.SUPABASE_ANON_KEY
+        );
+
+        return window.__madpixCheckoutSupabase;
+      }
+
+      function loadSelectedIds() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return [];
+
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return [];
+
+          return parsed.map((item) => String(item));
+        } catch (error) {
+          console.error("Failed to load selected IDs", error);
+          return [];
+        }
+      }
+
+      function saveSelectedIds(ids) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+      }
+
+      function clearSelection() {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+
+      async function loadPayPalSdk() {
+        if (window.paypal) {
+          return;
+        }
+
+        if (!window.PAYPAL_CLIENT_ID) {
+          throw new Error("Missing PayPal client ID");
+        }
+
+        await new Promise((resolve, reject) => {
+          const existing = document.querySelector('script[data-paypal-sdk="true"]');
+          if (existing) {
+            existing.addEventListener("load", resolve, { once: true });
+            existing.addEventListener("error", reject, { once: true });
+            return;
+          }
+
+          const script = document.createElement("script");
+          script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(window.PAYPAL_CLIENT_ID)}&currency=NZD`;
+          script.async = true;
+          script.dataset.paypalSdk = "true";
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("Failed to load PayPal SDK"));
+          document.head.appendChild(script);
+        });
+      }
+
+      async function loadSelectedPhotos() {
+        const selectedIds = loadSelectedIds();
+
+        if (!selectedIds.length) {
+          return [];
+        }
+
+        const sb = getSupabaseClient();
+
+        const { data, error } = await sb
+          .from("pe_photos")
+          .select("*")
+          .in("id", selectedIds);
+
+        if (error) {
+          throw error;
+        }
+
+        const rows = Array.isArray(data) ? data : [];
+        const orderMap = new Map(selectedIds.map((id, index) => [String(id), index]));
+
+        rows.sort((a, b) => {
+          return (orderMap.get(String(a.id)) ?? 0) - (orderMap.get(String(b.id)) ?? 0);
+        });
+
+        return rows;
+      }
+
+      function getTotal(photos) {
+        return photos.reduce((sum, photo) => sum + Number(photo.price || 0), 0);
+      }
+
+      function renderCheckout(photos) {
+        const total = getTotal(photos);
+
+        app.innerHTML = `
+          <div style="padding:20px;">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:20px;">
+              <h2 style="margin:0;">Checkout</h2>
+
+              <button
+                type="button"
+                id="backToGalleryBtn"
+                style="
+                  padding:10px 14px;
+                  border:1px solid #d1d5db;
+                  background:#ffffff;
+                  color:#111827;
+                  border-radius:10px;
+                  cursor:pointer;
+                  font-size:14px;
+                  font-weight:600;
+                "
+              >
+                Back to Gallery
+              </button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,420px);gap:24px;align-items:start;">
+              <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#ffffff;">
+                <div style="font-size:18px;font-weight:700;margin-bottom:14px;">Selected Photos</div>
+
+                ${
+                  photos.length === 0
+                    ? `<div>No photos selected.</div>`
+                    : photos
+                        .map((photo) => `
+                          <div style="display:grid;grid-template-columns:90px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f0;">
+                            <img
+                              src="${escapeHtml(photo.image_url)}"
+                              alt="${escapeHtml(cleanPhotoLabel(photo))}"
+                              style="width:90px;height:90px;object-fit:cover;border-radius:8px;"
+                            >
+                            <div>
+                              <div style="font-weight:700;">${escapeHtml(cleanPhotoLabel(photo))}</div>
+                              <div style="margin-top:6px;">${formatMoney(photo.price)}</div>
+                            </div>
+                            <button
+                              type="button"
+                              class="remove-photo-btn"
+                              data-photo-id="${escapeHtml(photo.id)}"
+                              style="
+                                padding:8px 10px;
+                                border:1px solid #d1d5db;
+                                background:#ffffff;
+                                color:#111827;
+                                border-radius:10px;
+                                cursor:pointer;
+                                font-size:13px;
+                                font-weight:600;
+                              "
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        `)
+                        .join("")
+                }
+              </div>
+
+              <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#ffffff;">
+                <div style="font-size:18px;font-weight:700;margin-bottom:14px;">Order Summary</div>
+                <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;">
+                  <span>Photos</span>
+                  <span>${photos.length}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:16px;font-size:18px;font-weight:700;">
+                  <span>Total</span>
+                  <span>${formatMoney(total)}</span>
+                </div>
+
+                ${
+                  photos.length === 0
+                    ? `
+                      <div style="color:#6b7280;">Add photos from the gallery to continue.</div>
+                    `
+                    : `
+                      <div id="paypal-button-container"></div>
+                    `
+                }
+              </div>
+            </div>
+          </div>
+        `;
+
+        const backBtn = document.getElementById("backToGalleryBtn");
+        if (backBtn) {
+          backBtn.addEventListener("click", function () {
+            window.location.href = "index.html";
+          });
+        }
+
+        document.querySelectorAll(".remove-photo-btn").forEach((button) => {
+          button.addEventListener("click", function () {
+            const selectedIds = loadSelectedIds().filter((id) => id !== String(this.getAttribute("data-photo-id")));
+            saveSelectedIds(selectedIds);
+            init();
+          });
+        });
+
+        if (photos.length > 0) {
+          renderPayPalButtons(photos, total);
+        }
+      }
+
+      async function renderPayPalButtons(photos, total) {
+        await loadPayPalSdk();
+
+        const container = document.getElementById("paypal-button-container");
+        if (!container) return;
+
+        container.innerHTML = "";
+
+        window.paypal.Buttons({
+          style: {
+            layout: "vertical",
+            shape: "rect",
+            label: "paypal"
+          },
+
+          createOrder: function (_, actions) {
+            return actions.order.create({
+              purchase_units: [
+                {
+                  amount: {
+                    currency_code: "NZD",
+                    value: Number(total).toFixed(2),
+                    breakdown: {
+                      item_total: {
+                        currency_code: "NZD",
+                        value: Number(total).toFixed(2)
+                      }
+                    }
+                  },
+                  items: photos.map((photo) => ({
+                    name: cleanPhotoLabel(photo).slice(0, 127),
+                    quantity: "1",
+                    unit_amount: {
+                      currency_code: "NZD",
+                      value: Number(photo.price || 0).toFixed(2)
+                    }
+                  }))
+                }
+              ]
+            });
+          },
+
+          onApprove: async function (_, actions) {
+            const details = await actions.order.capture();
+
+            clearSelection();
+
+            app.innerHTML = `
+              <div style="padding:20px;">
+                <div style="border:1px solid #e5e7eb;border-radius:12px;padding:20px;background:#ffffff;max-width:700px;margin:0 auto;">
+                  <div style="font-size:22px;font-weight:700;margin-bottom:12px;">Payment successful</div>
+                  <div style="margin-bottom:10px;">Thank you${details?.payer?.name?.given_name ? `, ${escapeHtml(details.payer.name.given_name)}` : ""}.</div>
+                  <div style="margin-bottom:10px;">Your payment has been captured.</div>
+                  <div style="margin-bottom:20px;font-weight:700;">Order total: ${formatMoney(total)}</div>
+                  <button
+                    type="button"
+                    id="returnToGalleryBtn"
+                    style="
+                      padding:10px 14px;
+                      border:1px solid #111827;
+                      background:#111827;
+                      color:#ffffff;
+                      border-radius:10px;
+                      cursor:pointer;
+                      font-size:14px;
+                      font-weight:700;
+                    "
+                  >
+                    Return to Gallery
+                  </button>
+                </div>
+              </div>
+            `;
+
+            const returnBtn = document.getElementById("returnToGalleryBtn");
+            if (returnBtn) {
+              returnBtn.addEventListener("click", function () {
+                window.location.href = "index.html";
+              });
+            }
+          },
+
+          onError: function (error) {
+            console.error(error);
+            alert("PayPal checkout failed. Please try again.");
+          }
+        }).render("#paypal-button-container");
+      }
+
+      async function init() {
+        try {
+          show("Loading checkout...");
+          const photos = await loadSelectedPhotos();
+          renderCheckout(photos);
+        } catch (error) {
+          console.error(error);
+          show("Error loading checkout");
+        }
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>

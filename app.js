@@ -1,24 +1,22 @@
-// MadPix Admin - locked function base with safe gallery delete
-// hard-wired core tables: pe_galleries + pe_photos
-
 (function () {
   "use strict";
 
-  const galleriesBtn = document.getElementById("showGalleriesBtn");
-  const visitorsBtn = document.getElementById("showVisitorsBtn");
-  const ordersBtn = document.getElementById("showOrdersBtn");
-  const output = document.getElementById("adminGalleryList");
+  const app = document.getElementById("app");
 
-  const statVisits = document.getElementById("statVisits");
-  const statPurchases = document.getElementById("statPurchases");
-  const statRevenue = document.getElementById("statRevenue");
+  const STORAGE_KEY = "madpix_selected_photos_v1";
 
-  function setOutput(html) {
-    if (!output) {
-      console.error("adminGalleryList not found");
-      return;
-    }
-    output.innerHTML = html;
+  const state = {
+    galleries: [],
+    selectedGalleryId: null,
+    photos: [],
+    selectedPhotoIds: new Set(),
+    lightboxPhotoId: null,
+    slideshowTimer: null,
+    slideshowRunning: false
+  };
+
+  function show(message) {
+    app.innerHTML = `<div style="padding:20px;">${escapeHtml(message)}</div>`;
   }
 
   function escapeHtml(value) {
@@ -30,52 +28,17 @@
       .replace(/'/g, "&#039;");
   }
 
-  function showLoading(message) {
-    setOutput(`<div style="padding:12px;margin-top:12px;">${escapeHtml(message)}</div>`);
-  }
-
-  function showError(message, error) {
-    console.error(message, error || "");
-    setOutput(`
-      <div style="padding:12px;border:1px solid #cc0000;margin-top:12px;">
-        <strong>Admin error</strong>
-        <div style="margin-top:8px;">${escapeHtml(message)}</div>
-      </div>
-    `);
-  }
-
-  function firstMatch(text, regexList) {
-    for (const regex of regexList) {
-      const match = text.match(regex);
-      if (match && match[1]) {
-        return match[1].trim();
-      }
-    }
-    return "";
-  }
-
   function formatMoney(value) {
     const amount = Number(value || 0);
-    return `$${amount.toFixed(2)}`;
+    return `NZ$${amount.toFixed(2)}`;
   }
 
-  function getGalleryName(gallery) {
-    return (
-      gallery.name ||
-      gallery.title ||
-      gallery.gallery_name ||
-      gallery.slug ||
-      `Gallery ${gallery.id}`
-    );
-  }
-
-  function cleanPhotoNumber(photo) {
+  function cleanPhotoLabel(photo) {
     const raw =
+      photo.title ||
+      photo.name ||
       photo.file_name ||
       photo.filename ||
-      photo.name ||
-      photo.title ||
-      photo.file_path ||
       photo.image_url ||
       "";
 
@@ -86,832 +49,649 @@
       .trim();
   }
 
-  function sortRowsByCreatedAtDesc(rows) {
-    return [...rows].sort((a, b) => {
-      const aTime = a && a.created_at ? new Date(a.created_at).getTime() : 0;
-      const bTime = b && b.created_at ? new Date(b.created_at).getTime() : 0;
-      return bTime - aTime;
-    });
-  }
-
-  async function readDataJsText() {
-    const response = await fetch("data.js", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error("Could not read data.js.");
-    }
-    return await response.text();
-  }
-
-  function extractSupabaseUrl(source) {
-    return firstMatch(source, [
-      /(https:\/\/[a-z0-9-]+\.supabase\.co)/i,
-      /["'`](https:\/\/[a-z0-9-]+\.supabase\.co)["'`]/i
-    ]);
-  }
-
-  function extractSupabaseAnonKey(source) {
-    return firstMatch(source, [
-      /(?:SUPABASE_ANON_KEY|SUPABASE_KEY|MADPIX_SUPABASE_ANON_KEY|APP_SUPABASE_ANON_KEY)\s*[:=]\s*["'`]([^"'`]+)["'`]/i,
-      /["'`](eyJ[A-Za-z0-9._-]{40,})["'`]/i
-    ]);
-  }
-
-  function extractBucketName(source) {
-    return firstMatch(source, [
-      /(?:SUPABASE_BUCKET|MADPIX_BUCKET|APP_BUCKET|bucket)\s*[:=]\s*["'`]([^"'`]+)["'`]/i
-    ]) || "photos";
-  }
-
-  async function getRuntimeConfig() {
-    if (window.__madpixRuntimeConfig) {
-      return window.__madpixRuntimeConfig;
-    }
-
-    const source = await readDataJsText();
-
-    const config = {
-      url: extractSupabaseUrl(source),
-      key: extractSupabaseAnonKey(source),
-      bucket: extractBucketName(source)
-    };
-
-    window.__madpixRuntimeConfig = config;
-    return config;
-  }
-
-  async function getSupabaseClient() {
-    if (window.__madpixAdminSupabase) {
-      return window.__madpixAdminSupabase;
+  function getSupabaseClient() {
+    if (window.__madpixPublicSupabase) {
+      return window.__madpixPublicSupabase;
     }
 
     if (!window.supabase || typeof window.supabase.createClient !== "function") {
-      throw new Error("Supabase library not loaded.");
+      throw new Error("Supabase library not loaded");
     }
 
-    const config = await getRuntimeConfig();
-
-    if (!config.url) {
-      throw new Error("Supabase URL not found in data.js.");
+    if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
+      throw new Error("Missing Supabase config");
     }
 
-    if (!config.key) {
-      throw new Error("Supabase anon key not found in data.js.");
-    }
+    window.__madpixPublicSupabase = window.supabase.createClient(
+      window.SUPABASE_URL,
+      window.SUPABASE_ANON_KEY
+    );
 
-    window.__madpixAdminSupabase = window.supabase.createClient(config.url, config.key);
-    return window.__madpixAdminSupabase;
+    return window.__madpixPublicSupabase;
   }
 
-  async function getBucketName() {
-    const config = await getRuntimeConfig();
-    return config.bucket || "photos";
-  }
-
-  async function queryVisitorTable() {
-    const sb = await getSupabaseClient();
-    const tables = ["pe_visits", "pe_visitors", "visitors"];
-    let lastError = null;
-
-    for (const tableName of tables) {
-      const { data, error } = await sb
-        .from(tableName)
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (!error) {
-        return { tableName, data: data || [] };
-      }
-      lastError = error;
-    }
-
-    throw lastError || new Error("No working visitors table found.");
-  }
-
-  async function queryOrdersTable() {
-    const sb = await getSupabaseClient();
-
-    const attempts = [
-      { table: "pe_orders", ordered: true },
-      { table: "pe_orders", ordered: false },
-      { table: "pe_purchases", ordered: true },
-      { table: "pe_purchases", ordered: false },
-      { table: "orders", ordered: true },
-      { table: "orders", ordered: false },
-      { table: "purchases", ordered: true },
-      { table: "purchases", ordered: false }
-    ];
-
-    let lastError = null;
-
-    for (const attempt of attempts) {
-      let query = sb.from(attempt.table).select("*");
-
-      if (attempt.ordered) {
-        query = query.order("created_at", { ascending: false });
-      }
-
-      const { data, error } = await query;
-
-      if (!error) {
-        const safeRows = Array.isArray(data) ? data : [];
-        return {
-          tableName: attempt.table,
-          data: attempt.ordered ? safeRows : sortRowsByCreatedAtDesc(safeRows)
-        };
-      }
-
-      lastError = error;
-    }
-
-    throw lastError || new Error("No working purchases table found.");
-  }
-
-  async function refreshStats() {
+  function loadSavedSelection() {
     try {
-      const visitResult = await queryVisitorTable().catch(() => ({ data: [] }));
-      const orderResult = await queryOrdersTable().catch(() => ({ data: [] }));
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return new Set();
 
-      const visits = Array.isArray(visitResult.data) ? visitResult.data : [];
-      const orders = Array.isArray(orderResult.data) ? orderResult.data : [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
 
-      let revenue = 0;
-      orders.forEach((row) => {
-        revenue += Number(
-          row.total ||
-          row.amount ||
-          row.total_amount ||
-          row.price_total ||
-          row.revenue ||
-          0
-        );
-      });
-
-      if (statVisits) statVisits.textContent = String(visits.length);
-      if (statPurchases) statPurchases.textContent = String(orders.length);
-      if (statRevenue) statRevenue.textContent = formatMoney(revenue);
+      return new Set(parsed.map((item) => String(item)));
     } catch (error) {
-      console.error("Could not refresh stats.", error);
-      if (statVisits) statVisits.textContent = "—";
-      if (statPurchases) statPurchases.textContent = "—";
-      if (statRevenue) statRevenue.textContent = "—";
+      console.error("Failed to load saved selection", error);
+      return new Set();
+    }
+  }
+
+  function persistSelection() {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(Array.from(state.selectedPhotoIds))
+      );
+    } catch (error) {
+      console.error("Failed to save selection", error);
     }
   }
 
   async function loadGalleries() {
-    try {
-      showLoading("Loading galleries...");
-      const sb = await getSupabaseClient();
+    const sb = getSupabaseClient();
 
-      const { data, error } = await sb
-        .from("pe_galleries")
-        .select("*")
-        .order("created_at", { ascending: false });
+    const { data, error } = await sb
+      .from("pe_galleries")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-      if (error) throw error;
+    if (error) throw error;
 
-      const galleries = Array.isArray(data) ? data : [];
+    return Array.isArray(data) ? data : [];
+  }
 
-      if (!galleries.length) {
-        setOutput(`
-          <div style="padding:12px;margin-top:12px;">
-            <div>No galleries found.</div>
-            <div style="margin-top:12px;">
-              <button type="button" id="createGalleryBtn">Create Gallery</button>
-            </div>
-          </div>
-        `);
-        return;
-      }
+  async function loadPhotos(galleryId) {
+    const sb = getSupabaseClient();
 
-      setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:12px;">
-            <button type="button" id="createGalleryBtn">Create Gallery</button>
-          </div>
-          ${galleries.map((gallery) => `
-            <div style="padding:10px 0;border-bottom:1px solid #ddd;">
-              <div><strong>${escapeHtml(getGalleryName(gallery))}</strong></div>
-              <div style="margin-top:8px;">
-                <button type="button" class="openGalleryBtn" data-gallery-id="${escapeHtml(gallery.id)}">
-                  Open Gallery
+    const { data, error } = await sb
+      .from("pe_photos")
+      .select("*")
+      .eq("gallery_id", galleryId)
+      .eq("is_live", true)
+      .order("sort_order", { ascending: true });
+
+    if (error) throw error;
+
+    return Array.isArray(data) ? data : [];
+  }
+
+  function getSelectedGallery() {
+    return state.galleries.find((gallery) => String(gallery.id) === String(state.selectedGalleryId)) || null;
+  }
+
+  function getSelectedPhotos() {
+    return state.photos.filter((photo) => state.selectedPhotoIds.has(String(photo.id)));
+  }
+
+  function getCartTotal() {
+    return getSelectedPhotos().reduce((sum, photo) => sum + Number(photo.price || 0), 0);
+  }
+
+  function getPhotoIndexById(photoId) {
+    return state.photos.findIndex((photo) => String(photo.id) === String(photoId));
+  }
+
+  function getCurrentLightboxPhoto() {
+    return state.photos.find((photo) => String(photo.id) === String(state.lightboxPhotoId)) || null;
+  }
+
+  function togglePhoto(photoId) {
+    const key = String(photoId);
+
+    if (state.selectedPhotoIds.has(key)) {
+      state.selectedPhotoIds.delete(key);
+    } else {
+      state.selectedPhotoIds.add(key);
+    }
+
+    persistSelection();
+    renderPage();
+  }
+
+  function clearSelectionForCurrentGallery() {
+    state.photos.forEach((photo) => {
+      state.selectedPhotoIds.delete(String(photo.id));
+    });
+    persistSelection();
+  }
+
+  async function selectGallery(galleryId) {
+    stopSlideshow();
+    state.lightboxPhotoId = null;
+    state.selectedGalleryId = galleryId;
+    await refreshSelectedGallery();
+  }
+
+  function openLightbox(photoId) {
+    state.lightboxPhotoId = String(photoId);
+    renderPage();
+  }
+
+  function closeLightbox() {
+    stopSlideshow();
+    state.lightboxPhotoId = null;
+    renderPage();
+  }
+
+  function showPreviousPhoto() {
+    const currentIndex = getPhotoIndexById(state.lightboxPhotoId);
+    if (currentIndex === -1 || state.photos.length === 0) return;
+
+    const nextIndex = currentIndex === 0 ? state.photos.length - 1 : currentIndex - 1;
+    state.lightboxPhotoId = String(state.photos[nextIndex].id);
+    renderPage();
+  }
+
+  function showNextPhoto() {
+    const currentIndex = getPhotoIndexById(state.lightboxPhotoId);
+    if (currentIndex === -1 || state.photos.length === 0) return;
+
+    const nextIndex = currentIndex === state.photos.length - 1 ? 0 : currentIndex + 1;
+    state.lightboxPhotoId = String(state.photos[nextIndex].id);
+    renderPage();
+  }
+
+  function stopSlideshow() {
+    if (state.slideshowTimer) {
+      clearInterval(state.slideshowTimer);
+      state.slideshowTimer = null;
+    }
+    state.slideshowRunning = false;
+  }
+
+  function startSlideshow() {
+    stopSlideshow();
+    state.slideshowRunning = true;
+    state.slideshowTimer = setInterval(() => {
+      const currentIndex = getPhotoIndexById(state.lightboxPhotoId);
+      if (currentIndex === -1 || state.photos.length === 0) return;
+
+      const nextIndex = currentIndex === state.photos.length - 1 ? 0 : currentIndex + 1;
+      state.lightboxPhotoId = String(state.photos[nextIndex].id);
+      renderPage();
+    }, 3000);
+  }
+
+  function toggleSlideshow() {
+    if (state.slideshowRunning) {
+      stopSlideshow();
+    } else {
+      startSlideshow();
+    }
+    renderPage();
+  }
+
+  function renderGallerySelector() {
+    return `
+      <div style="margin-bottom:18px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:10px;">Galleries</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${state.galleries
+            .map((gallery) => {
+              const isSelected = String(gallery.id) === String(state.selectedGalleryId);
+
+              return `
+                <button
+                  type="button"
+                  class="gallery-select-btn"
+                  data-gallery-id="${escapeHtml(gallery.id)}"
+                  style="
+                    padding:8px 12px;
+                    border:1px solid ${isSelected ? "#111827" : "#d1d5db"};
+                    background:${isSelected ? "#111827" : "#ffffff"};
+                    color:${isSelected ? "#ffffff" : "#111827"};
+                    border-radius:999px;
+                    cursor:pointer;
+                    font-size:13px;
+                    font-weight:600;
+                  "
+                >
+                  ${escapeHtml(gallery.title || gallery.name || "Gallery")}
                 </button>
-              </div>
-            </div>
-          `).join("")}
-        </div>
-      `);
-    } catch (error) {
-      showError(error.message || "Failed to load galleries.", error);
-    }
-  }
-
-  async function loadVisitors() {
-    try {
-      showLoading("Loading visitors...");
-      const result = await queryVisitorTable();
-      const data = result.data || [];
-
-      if (!data.length) {
-        setOutput(`<div style="padding:12px;margin-top:12px;">No visitor records found.</div>`);
-        return;
-      }
-
-      setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:12px;"><strong>Visitors</strong></div>
-          <div style="margin-bottom:12px;font-size:12px;opacity:0.7;">Source table: ${escapeHtml(result.tableName)}</div>
-          <div style="overflow:auto;">
-            <table style="width:100%;border-collapse:collapse;">
-              <thead>
-                <tr>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">When</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Gallery</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Visitor</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${data.map((row) => `
-                  <tr>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.created_at || row.visited_at || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.gallery_id || row.gallery_name || row.gallery_slug || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.email || row.name || row.visitor_id || row.ip || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.referrer || row.source || "")}</td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `);
-    } catch (error) {
-      showError("Could not load visitors. No working visitors table found.", error);
-    }
-  }
-
-  async function loadOrders() {
-    try {
-      showLoading("Loading purchases...");
-      const result = await queryOrdersTable();
-      const data = result.data || [];
-
-      if (!data.length) {
-        setOutput(`<div style="padding:12px;margin-top:12px;">No purchase records found.</div>`);
-        return;
-      }
-
-      setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:12px;"><strong>Purchases</strong></div>
-          <div style="margin-bottom:12px;font-size:12px;opacity:0.7;">Source table: ${escapeHtml(result.tableName)}</div>
-          <div style="overflow:auto;">
-            <table style="width:100%;border-collapse:collapse;">
-              <thead>
-                <tr>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">When</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Buyer</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Total</th>
-                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${data.map((row) => `
-                  <tr>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.created_at || "")}</td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">
-                      ${escapeHtml(
-                        row.customer_email ||
-                        row.customer_name ||
-                        row.email ||
-                        row.name ||
-                        row.buyer_email ||
-                        row.buyer_name ||
-                        ""
-                      )}
-                    </td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">
-                      ${escapeHtml(
-                        formatMoney(
-                          row.total ||
-                          row.amount ||
-                          row.total_amount ||
-                          row.price_total ||
-                          row.revenue ||
-                          0
-                        )
-                      )}
-                    </td>
-                    <td style="padding:8px;border-bottom:1px solid #eee;">
-                      ${escapeHtml(
-                        row.payment_status ||
-                        row.status ||
-                        row.order_status ||
-                        ""
-                      )}
-                    </td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `);
-    } catch (error) {
-      showError("Could not load purchases. No working purchases table found.", error);
-    }
-  }
-
-  async function openGallery(galleryId) {
-    try {
-      showLoading("Loading gallery...");
-      const sb = await getSupabaseClient();
-
-      const { data: gallery, error: galleryError } = await sb
-        .from("pe_galleries")
-        .select("*")
-        .eq("id", galleryId)
-        .single();
-
-      if (galleryError) throw galleryError;
-
-      const { data: photos, error: photosError } = await sb
-        .from("pe_photos")
-        .select("*")
-        .eq("gallery_id", galleryId)
-        .order("created_at", { ascending: true });
-
-      if (photosError) throw photosError;
-
-      const photoList = Array.isArray(photos) ? photos : [];
-
-      let galleryPrice = "";
-      if (photoList.length > 0) {
-        const pricedPhoto = photoList.find((photo) => photo.price !== null && photo.price !== undefined && photo.price !== "");
-        if (pricedPhoto) {
-          galleryPrice = String(pricedPhoto.price);
-        }
-      }
-
-      const title = getGalleryName(gallery);
-      const liveCount = photoList.filter((photo) => !!photo.is_live).length;
-
-      setOutput(`
-        <div style="margin-top:12px;">
-          <div style="margin-bottom:16px;">
-            <button type="button" id="backToGalleriesBtn">Back to Galleries</button>
-            <button type="button" id="uploadPhotosBtn" style="margin-left:8px;">Upload Photos</button>
-            <button type="button" id="deleteGalleryBtn" data-gallery-id="${escapeHtml(galleryId)}" data-gallery-name="${escapeHtml(title)}" style="margin-left:8px;">Delete Gallery</button>
-            <input type="file" id="photoUploadInput" multiple style="display:none;" data-gallery-id="${escapeHtml(galleryId)}" />
-          </div>
-
-          <div style="padding:18px;border-bottom:1px solid #ddd;">
-            <h3 style="margin-bottom:12px;">${escapeHtml(title)}</h3>
-
-            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:14px;">
-              <div style="min-width:220px;flex:0 1 260px;">
-                <label style="display:block;margin-bottom:6px;">Gallery Price</label>
-                <input type="number" step="0.01" id="galleryPriceInput" value="${escapeHtml(galleryPrice)}">
-              </div>
-              <div>
-                <button type="button" id="saveGalleryPriceBtn" data-gallery-id="${escapeHtml(galleryId)}">
-                  Save Gallery Price
-                </button>
-              </div>
-            </div>
-
-            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
-              <button type="button" id="makeGalleryLiveBtn" data-gallery-id="${escapeHtml(galleryId)}">
-                Make Gallery Live
-              </button>
-              <button type="button" id="makeGalleryDraftBtn" data-gallery-id="${escapeHtml(galleryId)}">
-                Make Gallery Draft
-              </button>
-              <div style="font-size:14px;color:#6b7280;">
-                ${escapeHtml(String(liveCount))} of ${escapeHtml(String(photoList.length))} live
-              </div>
-            </div>
-          </div>
-
-          ${
-            !photoList.length
-              ? `<div style="padding:18px 0;">No photos in this gallery yet.</div>`
-              : `
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:18px;">
-                  ${photoList.map((photo) => {
-                    const photoNumber = cleanPhotoNumber(photo);
-                    return `
-                      <div style="padding:14px;border:1px solid #e5e7eb;border-radius:18px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,0.05);">
-                        <div style="margin-bottom:10px;">
-                          ${
-                            photo.image_url
-                              ? `<img src="${escapeHtml(photo.image_url)}" alt="" style="width:100%;height:180px;object-fit:cover;border-radius:14px;">`
-                              : `<div style="height:180px;border-radius:14px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;">No image</div>`
-                          }
-                        </div>
-
-                        <div style="font-size:24px;font-weight:800;line-height:1.1;margin-bottom:12px;color:#111827;">
-                          ${escapeHtml(photoNumber || "Photo")}
-                        </div>
-
-                        <div style="margin-bottom:10px;">
-                          <label style="display:block;margin-bottom:6px;">Sort Order</label>
-                          <input
-                            type="number"
-                            class="photoSortInput"
-                            data-photo-id="${escapeHtml(photo.id)}"
-                            data-gallery-id="${escapeHtml(galleryId)}"
-                            value="${escapeHtml(photo.sort_order || "")}"
-                          >
-                        </div>
-
-                        <div style="margin-bottom:4px;">
-                          <label>
-                            <input
-                              type="checkbox"
-                              class="photoLiveInput"
-                              data-photo-id="${escapeHtml(photo.id)}"
-                              data-gallery-id="${escapeHtml(galleryId)}"
-                              ${photo.is_live ? "checked" : ""}
-                            >
-                            Live
-                          </label>
-                        </div>
-                      </div>
-                    `;
-                  }).join("")}
-                </div>
-              `
-          }
-        </div>
-      `);
-    } catch (error) {
-      showError(error.message || "Failed to open gallery.", error);
-    }
-  }
-
-  function showCreateGalleryForm() {
-    setOutput(`
-      <div style="margin-top:12px;">
-        <div style="margin-bottom:12px;">
-          <button type="button" id="backToGalleriesBtn">Back to Galleries</button>
-        </div>
-
-        <h3>Create Gallery</h3>
-
-        <div style="margin-bottom:12px;">
-          <label style="display:block;margin-bottom:6px;">Gallery Name</label>
-          <input type="text" id="newGalleryName">
-        </div>
-
-        <div>
-          <button type="button" id="saveNewGalleryBtn">Create Gallery</button>
+              `;
+            })
+            .join("")}
         </div>
       </div>
-    `);
+    `;
   }
 
-  async function createGallery() {
-    try {
-      const nameInput = document.getElementById("newGalleryName");
-      const name = nameInput ? nameInput.value.trim() : "";
+  function renderStickyCheckoutBar() {
+    const selectedPhotos = getSelectedPhotos();
+    const count = selectedPhotos.length;
+    const total = getCartTotal();
+    const disabled = count === 0;
 
-      if (!name) {
-        showError("Gallery name is required.");
-        return;
-      }
+    return `
+      <div
+        style="
+          position:sticky;
+          top:0;
+          z-index:20;
+          background:rgba(255,255,255,0.96);
+          backdrop-filter:blur(6px);
+          border:1px solid #e5e7eb;
+          border-radius:12px;
+          padding:10px 14px;
+          margin-bottom:18px;
+        "
+      >
+        <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center;">
+          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:13px;color:#374151;">
+            <div><strong>${count}</strong> selected</div>
+            <div><strong>${formatMoney(total)}</strong></div>
+          </div>
 
-      showLoading("Creating gallery...");
-      const sb = await getSupabaseClient();
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button
+              type="button"
+              id="clearSelectionBtn"
+              ${disabled ? "disabled" : ""}
+              style="
+                padding:8px 12px;
+                border:1px solid #d1d5db;
+                background:#ffffff;
+                color:#111827;
+                border-radius:10px;
+                cursor:${disabled ? "not-allowed" : "pointer"};
+                opacity:${disabled ? "0.5" : "1"};
+                font-size:13px;
+                font-weight:600;
+              "
+            >
+              Clear
+            </button>
 
-      const payload = {
-        name: name,
-        slug: name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
-        is_live: false
-      };
-
-      const { data, error } = await sb
-        .from("pe_galleries")
-        .insert(payload)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      await openGallery(data.id);
-      await refreshStats();
-    } catch (error) {
-      showError(error.message || "Failed to create gallery.", error);
-    }
+            <button
+              type="button"
+              id="goToCheckoutBtn"
+              ${disabled ? "disabled" : ""}
+              style="
+                padding:8px 14px;
+                border:1px solid #111827;
+                background:#111827;
+                color:#ffffff;
+                border-radius:10px;
+                cursor:${disabled ? "not-allowed" : "pointer"};
+                opacity:${disabled ? "0.5" : "1"};
+                font-size:13px;
+                font-weight:700;
+              "
+            >
+              Checkout
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
-  async function uploadPhotos(galleryId, files) {
-    try {
-      if (!files || files.length === 0) {
-        return;
-      }
-
-      showLoading("Uploading photos...");
-      const sb = await getSupabaseClient();
-      const bucketName = await getBucketName();
-
-      for (const file of Array.from(files)) {
-        const extension = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
-        const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
-        const filePath = `${galleryId}/${fileName}`;
-        const cleanedTitle = file.name
-          .replace(/\.[^.]+$/, "")
-          .replace(/[-_]?result$/i, "")
-          .trim();
-
-        const { error: uploadError } = await sb.storage
-          .from(bucketName)
-          .upload(filePath, file);
-
-        if (uploadError) throw uploadError;
-
-        const { data: publicData } = sb.storage
-          .from(bucketName)
-          .getPublicUrl(filePath);
-
-        const { error: insertError } = await sb
-          .from("pe_photos")
-          .insert({
-            gallery_id: galleryId,
-            title: cleanedTitle,
-            image_url: publicData.publicUrl,
-            file_path: filePath,
-            is_live: true
-          });
-
-        if (insertError) throw insertError;
-      }
-
-      await openGallery(galleryId);
-      await refreshStats();
-    } catch (error) {
-      showError(error.message || "Failed to upload photos.", error);
+  function renderPhotos() {
+    if (!state.photos.length) {
+      return `<div>No live photos in this gallery</div>`;
     }
+
+    return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px;">
+        ${state.photos
+          .map((photo) => {
+            const label = cleanPhotoLabel(photo);
+            const isSelected = state.selectedPhotoIds.has(String(photo.id));
+            const price = Number(photo.price || 0);
+            const canBuy = price > 0;
+
+            return `
+              <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#ffffff;">
+                <button
+                  type="button"
+                  class="photo-open-btn"
+                  data-photo-id="${escapeHtml(photo.id)}"
+                  style="display:block;width:100%;padding:0;border:none;background:transparent;cursor:pointer;text-align:left;"
+                >
+                  <img
+                    src="${escapeHtml(photo.image_url)}"
+                    alt="${escapeHtml(label)}"
+                    style="width:100%;height:260px;object-fit:cover;display:block;border-radius:8px;"
+                  >
+                </button>
+
+                <div style="margin-top:10px;font-size:15px;font-weight:700;line-height:1.35;color:#111827;">
+                  ${escapeHtml(label)}
+                </div>
+
+                <div style="margin-top:4px;font-size:13px;font-weight:600;color:#6b7280;">
+                  ${canBuy ? formatMoney(price) : "Price unavailable"}
+                </div>
+
+                <div style="margin-top:10px;display:flex;gap:8px;">
+                  <button
+                    type="button"
+                    class="photo-open-btn"
+                    data-photo-id="${escapeHtml(photo.id)}"
+                    style="
+                      flex:1;
+                      padding:9px 10px;
+                      border:1px solid #d1d5db;
+                      background:#ffffff;
+                      color:#111827;
+                      border-radius:10px;
+                      cursor:pointer;
+                      font-size:13px;
+                      font-weight:600;
+                    "
+                  >
+                    View
+                  </button>
+
+                  <button
+                    type="button"
+                    class="photo-toggle-btn"
+                    data-photo-id="${escapeHtml(photo.id)}"
+                    ${canBuy ? "" : "disabled"}
+                    style="
+                      flex:1;
+                      padding:9px 10px;
+                      border:1px solid ${isSelected ? "#111827" : "#d1d5db"};
+                      background:${isSelected ? "#111827" : "#ffffff"};
+                      color:${isSelected ? "#ffffff" : "#111827"};
+                      border-radius:10px;
+                      cursor:${canBuy ? "pointer" : "not-allowed"};
+                      opacity:${canBuy ? "1" : "0.5"};
+                      font-size:13px;
+                      font-weight:600;
+                    "
+                  >
+                    ${isSelected ? "Selected" : "Select"}
+                  </button>
+                </div>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
   }
 
-  async function saveGalleryPrice(galleryId) {
-    try {
-      const priceInput = document.getElementById("galleryPriceInput");
-      const priceValue = priceInput ? priceInput.value.trim() : "";
+  function renderLightbox() {
+    const photo = getCurrentLightboxPhoto();
+    if (!photo) return "";
 
-      if (priceValue === "") {
-        showError("Gallery price is required.");
-        return;
-      }
+    const label = cleanPhotoLabel(photo);
+    const currentIndex = getPhotoIndexById(photo.id);
+    const totalCount = state.photos.length;
 
-      showLoading("Saving gallery price...");
-      const sb = await getSupabaseClient();
+    return `
+      <div
+        id="lightboxOverlay"
+        style="
+          position:fixed;
+          inset:0;
+          background:rgba(0,0,0,0.88);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          z-index:1000;
+          padding:20px;
+        "
+      >
+        <div
+          style="
+            position:relative;
+            width:min(1100px,100%);
+            max-height:100%;
+            overflow:auto;
+            background:#111827;
+            border-radius:16px;
+            padding:18px;
+          "
+        >
+          <button
+            type="button"
+            id="closeLightboxBtn"
+            style="
+              position:absolute;
+              top:12px;
+              right:12px;
+              width:40px;
+              height:40px;
+              border:none;
+              border-radius:999px;
+              background:rgba(255,255,255,0.12);
+              color:#ffffff;
+              cursor:pointer;
+              font-size:20px;
+              font-weight:700;
+            "
+          >
+            ×
+          </button>
 
-      const { error } = await sb
-        .from("pe_photos")
-        .update({ price: Number(priceValue) })
-        .eq("gallery_id", galleryId);
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;color:#ffffff;">
+            <div>
+              <div style="font-size:20px;font-weight:700;">${escapeHtml(label)}</div>
+              <div style="margin-top:4px;font-size:13px;color:#d1d5db;">${currentIndex + 1} of ${totalCount}</div>
+            </div>
 
-      if (error) throw error;
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button
+                type="button"
+                id="prevPhotoBtn"
+                style="
+                  padding:8px 12px;
+                  border:1px solid rgba(255,255,255,0.18);
+                  background:transparent;
+                  color:#ffffff;
+                  border-radius:10px;
+                  cursor:pointer;
+                  font-size:13px;
+                  font-weight:600;
+                "
+              >
+                Prev
+              </button>
 
-      await openGallery(galleryId);
-      await refreshStats();
-    } catch (error) {
-      showError(error.message || "Failed to save gallery price.", error);
-    }
+              <button
+                type="button"
+                id="toggleSlideshowBtn"
+                style="
+                  padding:8px 12px;
+                  border:1px solid rgba(255,255,255,0.18);
+                  background:transparent;
+                  color:#ffffff;
+                  border-radius:10px;
+                  cursor:pointer;
+                  font-size:13px;
+                  font-weight:600;
+                "
+              >
+                ${state.slideshowRunning ? "Stop 3s Auto" : "Start 3s Auto"}
+              </button>
+
+              <button
+                type="button"
+                id="nextPhotoBtn"
+                style="
+                  padding:8px 12px;
+                  border:1px solid rgba(255,255,255,0.18);
+                  background:transparent;
+                  color:#ffffff;
+                  border-radius:10px;
+                  cursor:pointer;
+                  font-size:13px;
+                  font-weight:600;
+                "
+              >
+                Next
+              </button>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:center;">
+            <img
+              src="${escapeHtml(photo.image_url)}"
+              alt="${escapeHtml(label)}"
+              style="max-width:100%;max-height:75vh;object-fit:contain;display:block;border-radius:12px;background:#000000;"
+            >
+          </div>
+        </div>
+      </div>
+    `;
   }
 
-  async function setGalleryLive(galleryId, isLive) {
-    try {
-      showLoading(isLive ? "Making gallery live..." : "Making gallery draft...");
-      const sb = await getSupabaseClient();
+  function renderGalleryView() {
+    const gallery = getSelectedGallery();
 
-      const { error: photoError } = await sb
-        .from("pe_photos")
-        .update({ is_live: isLive })
-        .eq("gallery_id", galleryId);
-
-      if (photoError) throw photoError;
-
-      const { error: galleryError } = await sb
-        .from("pe_galleries")
-        .update({ is_live: isLive })
-        .eq("id", galleryId);
-
-      if (galleryError) throw galleryError;
-
-      await openGallery(galleryId);
-    } catch (error) {
-      showError(error.message || "Failed to update gallery live state.", error);
+    if (!gallery) {
+      return `<div style="padding:20px;">No gallery selected</div>`;
     }
+
+    return `
+      <div style="padding:20px;">
+        ${renderGallerySelector()}
+
+        <div style="margin-bottom:14px;">
+          <h2 style="margin:0;font-size:26px;line-height:1.2;">${escapeHtml(gallery.title || gallery.name || "Gallery")}</h2>
+        </div>
+
+        ${renderStickyCheckoutBar()}
+        ${renderPhotos()}
+      </div>
+
+      ${renderLightbox()}
+    `;
   }
 
-  async function deleteGallery(galleryId, galleryName) {
-    const firstConfirm = window.confirm(
-      `Delete gallery "${galleryName}"?\n\nThis will remove the gallery and all of its photos.`
-    );
+  function bindUi() {
+    document.querySelectorAll(".gallery-select-btn").forEach((button) => {
+      button.addEventListener("click", async function () {
+        await selectGallery(this.getAttribute("data-gallery-id"));
+      });
+    });
 
-    if (!firstConfirm) {
-      return;
+    document.querySelectorAll(".photo-toggle-btn").forEach((button) => {
+      button.addEventListener("click", function () {
+        togglePhoto(this.getAttribute("data-photo-id"));
+      });
+    });
+
+    document.querySelectorAll(".photo-open-btn").forEach((button) => {
+      button.addEventListener("click", function () {
+        openLightbox(this.getAttribute("data-photo-id"));
+      });
+    });
+
+    const clearSelectionBtn = document.getElementById("clearSelectionBtn");
+    if (clearSelectionBtn) {
+      clearSelectionBtn.addEventListener("click", function () {
+        clearSelectionForCurrentGallery();
+        renderPage();
+      });
     }
 
-    const typed = window.prompt(`Type DELETE to remove "${galleryName}"`);
-
-    if (typed !== "DELETE") {
-      return;
+    const goToCheckoutBtn = document.getElementById("goToCheckoutBtn");
+    if (goToCheckoutBtn) {
+      goToCheckoutBtn.addEventListener("click", function () {
+        window.location.href = "checkout.html";
+      });
     }
 
-    try {
-      showLoading(`Deleting gallery "${galleryName}"...`);
-      const sb = await getSupabaseClient();
-      const bucketName = await getBucketName();
+    const closeLightboxBtn = document.getElementById("closeLightboxBtn");
+    if (closeLightboxBtn) {
+      closeLightboxBtn.addEventListener("click", function () {
+        closeLightbox();
+      });
+    }
 
-      const { data: photos, error: photosReadError } = await sb
-        .from("pe_photos")
-        .select("id, file_path")
-        .eq("gallery_id", galleryId);
+    const prevPhotoBtn = document.getElementById("prevPhotoBtn");
+    if (prevPhotoBtn) {
+      prevPhotoBtn.addEventListener("click", function () {
+        showPreviousPhoto();
+      });
+    }
 
-      if (photosReadError) throw photosReadError;
+    const nextPhotoBtn = document.getElementById("nextPhotoBtn");
+    if (nextPhotoBtn) {
+      nextPhotoBtn.addEventListener("click", function () {
+        showNextPhoto();
+      });
+    }
 
-      const photoRows = Array.isArray(photos) ? photos : [];
-      const filePaths = photoRows
-        .map((row) => row.file_path)
-        .filter((path) => typeof path === "string" && path.trim() !== "");
+    const toggleSlideshowBtn = document.getElementById("toggleSlideshowBtn");
+    if (toggleSlideshowBtn) {
+      toggleSlideshowBtn.addEventListener("click", function () {
+        toggleSlideshow();
+      });
+    }
 
-      if (filePaths.length > 0) {
-        const { error: storageRemoveError } = await sb.storage
-          .from(bucketName)
-          .remove(filePaths);
-
-        if (storageRemoveError) {
-          throw storageRemoveError;
+    const lightboxOverlay = document.getElementById("lightboxOverlay");
+    if (lightboxOverlay) {
+      lightboxOverlay.addEventListener("click", function (event) {
+        if (event.target === lightboxOverlay) {
+          closeLightbox();
         }
+      });
+    }
+
+    document.onkeydown = function (event) {
+      if (!state.lightboxPhotoId) return;
+
+      if (event.key === "Escape") {
+        closeLightbox();
+      } else if (event.key === "ArrowLeft") {
+        showPreviousPhoto();
+      } else if (event.key === "ArrowRight") {
+        showNextPhoto();
+      } else if (event.key === " ") {
+        event.preventDefault();
+        toggleSlideshow();
       }
+    };
+  }
 
-      const { error: deletePhotosError } = await sb
-        .from("pe_photos")
-        .delete()
-        .eq("gallery_id", galleryId);
+  function renderPage() {
+    app.innerHTML = renderGalleryView();
+    bindUi();
+  }
 
-      if (deletePhotosError) throw deletePhotosError;
-
-      const { error: deleteGalleryError } = await sb
-        .from("pe_galleries")
-        .delete()
-        .eq("id", galleryId);
-
-      if (deleteGalleryError) throw deleteGalleryError;
-
-      await refreshStats();
-      await loadGalleries();
+  async function refreshSelectedGallery() {
+    try {
+      show("Loading gallery...");
+      state.photos = await loadPhotos(state.selectedGalleryId);
+      renderPage();
     } catch (error) {
-      const messageText = String(error && error.message ? error.message : error || "");
+      console.error(error);
+      show("Error loading gallery");
+    }
+  }
 
-      if (
-        /foreign key/i.test(messageText) ||
-        /violates/i.test(messageText) ||
-        /constraint/i.test(messageText)
-      ) {
-        showError(
-          `Could not delete "${galleryName}". It may have existing orders linked to its photos.`,
-          error
-        );
+  async function init() {
+    try {
+      show("Loading galleries...");
+      state.selectedPhotoIds = loadSavedSelection();
+      state.galleries = await loadGalleries();
+
+      if (!state.galleries.length) {
+        show("No galleries found");
         return;
       }
 
-      showError(`Failed to delete gallery "${galleryName}".`, error);
-    }
-  }
-
-  async function savePhotoAuto(photoId, galleryId) {
-    try {
-      const sortInput = document.querySelector(`.photoSortInput[data-photo-id="${photoId}"]`);
-      const liveInput = document.querySelector(`.photoLiveInput[data-photo-id="${photoId}"]`);
-
-      const payload = {
-        is_live: liveInput ? !!liveInput.checked : false
-      };
-
-      if (sortInput && sortInput.value !== "") {
-        payload.sort_order = Number(sortInput.value);
-      } else {
-        payload.sort_order = null;
-      }
-
-      const sb = await getSupabaseClient();
-      const { error } = await sb
-        .from("pe_photos")
-        .update(payload)
-        .eq("id", photoId);
-
-      if (error) throw error;
+      state.selectedGalleryId = state.galleries[0].id;
+      state.photos = await loadPhotos(state.selectedGalleryId);
+      renderPage();
     } catch (error) {
-      showError(error.message || "Failed to save photo edits.", error);
-      await openGallery(galleryId);
+      console.error(error);
+      show("Error loading gallery");
     }
   }
 
-  if (galleriesBtn) {
-    galleriesBtn.addEventListener("click", loadGalleries);
-  }
-
-  if (visitorsBtn) {
-    visitorsBtn.addEventListener("click", loadVisitors);
-  }
-
-  if (ordersBtn) {
-    ordersBtn.addEventListener("click", loadOrders);
-  }
-
-  document.addEventListener("click", function (event) {
-    const openBtn = event.target.closest(".openGalleryBtn");
-    if (openBtn) {
-      openGallery(openBtn.getAttribute("data-gallery-id"));
-      return;
-    }
-
-    const backBtn = event.target.closest("#backToGalleriesBtn");
-    if (backBtn) {
-      loadGalleries();
-      return;
-    }
-
-    const createBtn = event.target.closest("#createGalleryBtn");
-    if (createBtn) {
-      showCreateGalleryForm();
-      return;
-    }
-
-    const saveNewGalleryBtn = event.target.closest("#saveNewGalleryBtn");
-    if (saveNewGalleryBtn) {
-      createGallery();
-      return;
-    }
-
-    const uploadBtn = event.target.closest("#uploadPhotosBtn");
-    if (uploadBtn) {
-      const input = document.getElementById("photoUploadInput");
-      if (input) input.click();
-      return;
-    }
-
-    const saveGalleryPriceBtn = event.target.closest("#saveGalleryPriceBtn");
-    if (saveGalleryPriceBtn) {
-      saveGalleryPrice(saveGalleryPriceBtn.getAttribute("data-gallery-id"));
-      return;
-    }
-
-    const makeGalleryLiveBtn = event.target.closest("#makeGalleryLiveBtn");
-    if (makeGalleryLiveBtn) {
-      setGalleryLive(makeGalleryLiveBtn.getAttribute("data-gallery-id"), true);
-      return;
-    }
-
-    const makeGalleryDraftBtn = event.target.closest("#makeGalleryDraftBtn");
-    if (makeGalleryDraftBtn) {
-      setGalleryLive(makeGalleryDraftBtn.getAttribute("data-gallery-id"), false);
-      return;
-    }
-
-    const deleteGalleryBtn = event.target.closest("#deleteGalleryBtn");
-    if (deleteGalleryBtn) {
-      deleteGallery(
-        deleteGalleryBtn.getAttribute("data-gallery-id"),
-        deleteGalleryBtn.getAttribute("data-gallery-name") || "Gallery"
-      );
-      return;
-    }
-  });
-
-  document.addEventListener("change", function (event) {
-    const fileInput = event.target.closest("#photoUploadInput");
-    if (fileInput) {
-      uploadPhotos(fileInput.getAttribute("data-gallery-id"), fileInput.files);
-      return;
-    }
-
-    const liveInput = event.target.closest(".photoLiveInput");
-    if (liveInput) {
-      savePhotoAuto(
-        liveInput.getAttribute("data-photo-id"),
-        liveInput.getAttribute("data-gallery-id")
-      );
-    }
-  });
-
-  document.addEventListener(
-    "blur",
-    function (event) {
-      const sortInput = event.target.closest(".photoSortInput");
-      if (sortInput) {
-        savePhotoAuto(
-          sortInput.getAttribute("data-photo-id"),
-          sortInput.getAttribute("data-gallery-id")
-        );
-      }
-    },
-    true
-  );
-
-  refreshStats();
-  console.log("MadPix admin ready");
+  init();
 })();
