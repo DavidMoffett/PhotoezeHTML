@@ -1,4 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&display=swap');
+/* === GLOBAL BACKGROUND (ONLY CHANGE) === */
+body {
+  background-color: #f2e9dc;
+}
 
 * {
   margin: 0;
