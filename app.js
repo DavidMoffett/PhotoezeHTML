@@ -423,7 +423,7 @@
                   style="display:block;width:100%;padding:0;border:none;background:transparent;cursor:pointer;text-align:left;"
                 >
                   <img
-                    src="${escapeHtml(photo.image_url)}"
+                   src="${escapeHtml(photo.preview_url || photo.image_url)}" loading="lazy" decoding="async" 
                     alt="${escapeHtml(label)}"
                     style="width:100%;height:260px;object-fit:cover;display:block;border-radius:8px;"
                   >
@@ -579,7 +579,7 @@
 
           <div style="display:flex;align-items:center;justify-content:center;">
             <img
-              src="${escapeHtml(photo.image_url)}"
+             src="${escapeHtml(photo.preview_url || photo.image_url)}" loading="lazy" decoding="async"
               alt="${escapeHtml(label)}"
               style="max-width:100%;max-height:75vh;object-fit:contain;display:block;border-radius:12px;background:#000000;"
             >
