@@ -1,835 +1,917 @@
-const USER_KEY = "photoeze_user";
-const CART_KEY = "photoeze_cart";
+// MadPix Admin - locked function base with safe gallery delete
+// hard-wired core tables: pe_galleries + pe_photos
 
-let supabaseClient = null;
-let runtimeConfigPromise = null;
-let paypalScriptPromise = null;
+(function () {
+  "use strict";
 
-const state = {
-  galleries: [],
-  selectedGalleryId: null,
-  cart: [],
-  user: null,
-  view: "welcome",
-  loading: true,
-  error: "",
-  savingOrder: false,
-  savingVisitor: false,
-  lastPayPalOrderId: "",
-  lastPayPalCaptureId: "",
-  paypalReady: false,
-  paypalError: ""
-};
+  const galleriesBtn = document.getElementById("showGalleriesBtn");
+  const visitorsBtn = document.getElementById("showVisitorsBtn");
+  const ordersBtn = document.getElementById("showOrdersBtn");
+  const output = document.getElementById("adminGalleryList");
 
-function firstMatch(text, regexList) {
-  for (const regex of regexList) {
-    const match = text.match(regex);
-    if (match && match[1]) {
-      return match[1].trim();
+  const statVisits = document.getElementById("statVisits");
+  const statPurchases = document.getElementById("statPurchases");
+  const statRevenue = document.getElementById("statRevenue");
+
+  function setOutput(html) {
+    if (!output) {
+      console.error("adminGalleryList not found");
+      return;
     }
-  }
-  return "";
-}
-
-async function readDataJsText() {
-  const response = await fetch("data.js", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Could not read data.js.");
-  }
-  return await response.text();
-}
-
-function extractSupabaseUrl(source) {
-  return firstMatch(source, [
-    /(https:\/\/[a-z0-9-]+\.supabase\.co)/i,
-    /["'`](https:\/\/[a-z0-9-]+\.supabase\.co)["'`]/i
-  ]);
-}
-
-function extractSupabaseAnonKey(source) {
-  return firstMatch(source, [
-    /(?:SUPABASE_ANON_KEY|SUPABASE_KEY|MADPIX_SUPABASE_ANON_KEY|APP_SUPABASE_ANON_KEY|anonKey)\s*[:=]\s*["'`]([^"'`]+)["'`]/i,
-    /["'`](eyJ[A-Za-z0-9._-]{40,})["'`]/i
-  ]);
-}
-
-function extractPayPalClientId(source) {
-  return firstMatch(source, [
-    /(?:PAYPAL_CLIENT_ID|PAYPAL_SANDBOX_CLIENT_ID|PAYPAL_LIVE_CLIENT_ID|paypalClientId)\s*[:=]\s*["'`]([^"'`]+)["'`]/i
-  ]);
-}
-
-async function getRuntimeConfig() {
-  if (runtimeConfigPromise) {
-    return runtimeConfigPromise;
+    output.innerHTML = html;
   }
 
-  runtimeConfigPromise = (async () => {
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function showLoading(message) {
+    setOutput(`<div style="padding:12px;margin-top:12px;">${escapeHtml(message)}</div>`);
+  }
+
+  function showError(message, error) {
+    console.error(message, error || "");
+    setOutput(`
+      <div style="padding:12px;border:1px solid #cc0000;margin-top:12px;">
+        <strong>Admin error</strong>
+        <div style="margin-top:8px;">${escapeHtml(message)}</div>
+      </div>
+    `);
+  }
+
+  function firstMatch(text, regexList) {
+    for (const regex of regexList) {
+      const match = text.match(regex);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+    }
+    return "";
+  }
+
+  function formatMoney(value) {
+    const amount = Number(value || 0);
+    return `$${amount.toFixed(2)}`;
+  }
+
+  function getGalleryName(gallery) {
+    return (
+      gallery.name ||
+      gallery.title ||
+      gallery.gallery_name ||
+      gallery.slug ||
+      `Gallery ${gallery.id}`
+    );
+  }
+
+  function cleanPhotoNumber(photo) {
+    const raw =
+      photo.file_name ||
+      photo.filename ||
+      photo.name ||
+      photo.title ||
+      photo.file_path ||
+      photo.image_url ||
+      "";
+
+    const lastPart = String(raw).split("/").pop() || "";
+    return lastPart
+      .replace(/\.[^.]+$/, "")
+      .replace(/[-_]?result$/i, "")
+      .trim();
+  }
+
+  function sortRowsByCreatedAtDesc(rows) {
+    return [...rows].sort((a, b) => {
+      const aTime = a && a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b && b.created_at ? new Date(b.created_at).getTime() : 0;
+      return bTime - aTime;
+    });
+  }
+
+  async function readDataJsText() {
+    const response = await fetch("data.js", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Could not read data.js.");
+    }
+    return await response.text();
+  }
+
+  function extractSupabaseUrl(source) {
+    return firstMatch(source, [
+      /(https:\/\/[a-z0-9-]+\.supabase\.co)/i,
+      /["'`](https:\/\/[a-z0-9-]+\.supabase\.co)["'`]/i
+    ]);
+  }
+
+  function extractSupabaseAnonKey(source) {
+    return firstMatch(source, [
+      /(?:SUPABASE_ANON_KEY|SUPABASE_KEY|MADPIX_SUPABASE_ANON_KEY|APP_SUPABASE_ANON_KEY)\s*[:=]\s*["'`]([^"'`]+)["'`]/i,
+      /["'`](eyJ[A-Za-z0-9._-]{40,})["'`]/i
+    ]);
+  }
+
+  function extractBucketName(source) {
+    return firstMatch(source, [
+      /(?:SUPABASE_BUCKET|MADPIX_BUCKET|APP_BUCKET|bucket)\s*[:=]\s*["'`]([^"'`]+)["'`]/i
+    ]) || "photos";
+  }
+
+  async function getRuntimeConfig() {
+    if (window.__madpixRuntimeConfig) {
+      return window.__madpixRuntimeConfig;
+    }
+
     const source = await readDataJsText();
 
-    return {
-      supabaseUrl: extractSupabaseUrl(source),
-      supabaseAnonKey: extractSupabaseAnonKey(source),
-      paypalClientId: extractPayPalClientId(source)
+    const config = {
+      url: extractSupabaseUrl(source),
+      key: extractSupabaseAnonKey(source),
+      bucket: extractBucketName(source)
     };
-  })();
 
-  return runtimeConfigPromise;
-}
+    window.__madpixRuntimeConfig = config;
+    return config;
+  }
 
-async function createSupabaseClient() {
-  try {
-    if (!window.supabase || !window.supabase.createClient) {
-      throw new Error("Supabase library did not load.");
+  async function getSupabaseClient() {
+    if (window.__madpixAdminSupabase) {
+      return window.__madpixAdminSupabase;
+    }
+
+    if (!window.supabase || typeof window.supabase.createClient !== "function") {
+      throw new Error("Supabase library not loaded.");
     }
 
     const config = await getRuntimeConfig();
 
-    if (!config.supabaseUrl || !config.supabaseAnonKey) {
-      throw new Error("Supabase config not found.");
+    if (!config.url) {
+      throw new Error("Supabase URL not found in data.js.");
     }
 
-    supabaseClient = window.supabase.createClient(
-      config.supabaseUrl,
-      config.supabaseAnonKey
-    );
-  } catch (error) {
-    console.error("Supabase init error:", error);
-    state.error = "Could not start app.";
-    state.loading = false;
-  }
-}
+    if (!config.key) {
+      throw new Error("Supabase anon key not found in data.js.");
+    }
 
-async function loadPayPalSdk() {
-  if (window.paypal && typeof window.paypal.Buttons === "function") {
-    state.paypalReady = true;
-    state.paypalError = "";
-    return;
+    window.__madpixAdminSupabase = window.supabase.createClient(config.url, config.key);
+    return window.__madpixAdminSupabase;
   }
 
-  if (paypalScriptPromise) {
-    return paypalScriptPromise;
-  }
-
-  paypalScriptPromise = (async () => {
+  async function getBucketName() {
     const config = await getRuntimeConfig();
+    return config.bucket || "photos";
+  }
 
-    if (!config.paypalClientId) {
-      throw new Error("PayPal client ID not found in data.js.");
+  async function queryVisitorTable() {
+    const sb = await getSupabaseClient();
+    const tables = ["pe_visits", "pe_visitors", "visitors"];
+    let lastError = null;
+
+    for (const tableName of tables) {
+      const { data, error } = await sb
+        .from(tableName)
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error) {
+        return { tableName, data: data || [] };
+      }
+      lastError = error;
     }
 
-    await new Promise((resolve, reject) => {
-      const existing = document.querySelector('script[data-paypal-sdk="true"]');
-      if (existing) {
-        existing.addEventListener("load", resolve, { once: true });
-        existing.addEventListener("error", () => reject(new Error("PayPal SDK failed to load.")), { once: true });
+    throw lastError || new Error("No working visitors table found.");
+  }
+
+  async function queryOrdersTable() {
+    const sb = await getSupabaseClient();
+
+    const attempts = [
+      { table: "pe_orders", ordered: true },
+      { table: "pe_orders", ordered: false },
+      { table: "pe_purchases", ordered: true },
+      { table: "pe_purchases", ordered: false },
+      { table: "orders", ordered: true },
+      { table: "orders", ordered: false },
+      { table: "purchases", ordered: true },
+      { table: "purchases", ordered: false }
+    ];
+
+    let lastError = null;
+
+    for (const attempt of attempts) {
+      let query = sb.from(attempt.table).select("*");
+
+      if (attempt.ordered) {
+        query = query.order("created_at", { ascending: false });
+      }
+
+      const { data, error } = await query;
+
+      if (!error) {
+        const safeRows = Array.isArray(data) ? data : [];
+        return {
+          tableName: attempt.table,
+          data: attempt.ordered ? safeRows : sortRowsByCreatedAtDesc(safeRows)
+        };
+      }
+
+      lastError = error;
+    }
+
+    throw lastError || new Error("No working purchases table found.");
+  }
+
+  async function refreshStats() {
+    try {
+      const visitResult = await queryVisitorTable().catch(() => ({ data: [] }));
+      const orderResult = await queryOrdersTable().catch(() => ({ data: [] }));
+
+      const visits = Array.isArray(visitResult.data) ? visitResult.data : [];
+      const orders = Array.isArray(orderResult.data) ? orderResult.data : [];
+
+      let revenue = 0;
+      orders.forEach((row) => {
+        revenue += Number(
+          row.total ||
+          row.amount ||
+          row.total_amount ||
+          row.price_total ||
+          row.revenue ||
+          0
+        );
+      });
+
+      if (statVisits) statVisits.textContent = String(visits.length);
+      if (statPurchases) statPurchases.textContent = String(orders.length);
+      if (statRevenue) statRevenue.textContent = formatMoney(revenue);
+    } catch (error) {
+      console.error("Could not refresh stats.", error);
+      if (statVisits) statVisits.textContent = "—";
+      if (statPurchases) statPurchases.textContent = "—";
+      if (statRevenue) statRevenue.textContent = "—";
+    }
+  }
+
+  async function loadGalleries() {
+    try {
+      showLoading("Loading galleries...");
+      const sb = await getSupabaseClient();
+
+      const { data, error } = await sb
+        .from("pe_galleries")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const galleries = Array.isArray(data) ? data : [];
+
+      if (!galleries.length) {
+        setOutput(`
+          <div style="padding:12px;margin-top:12px;">
+            <div>No galleries found.</div>
+            <div style="margin-top:12px;">
+              <button type="button" id="createGalleryBtn">Create Gallery</button>
+            </div>
+          </div>
+        `);
         return;
       }
 
-      const script = document.createElement("script");
-      script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(
-        config.paypalClientId
-      )}&currency=NZD&intent=capture`;
-      script.async = true;
-      script.dataset.paypalSdk = "true";
-      script.onload = resolve;
-      script.onerror = () => reject(new Error("PayPal SDK failed to load."));
-      document.head.appendChild(script);
-    });
-
-    if (!window.paypal || typeof window.paypal.Buttons !== "function") {
-      throw new Error("PayPal SDK loaded but Buttons are unavailable.");
+      setOutput(`
+        <div style="margin-top:12px;">
+          <div style="margin-bottom:12px;">
+            <button type="button" id="createGalleryBtn">Create Gallery</button>
+          </div>
+          ${galleries.map((gallery) => `
+            <div style="padding:10px 0;border-bottom:1px solid #ddd;">
+              <div><strong>${escapeHtml(getGalleryName(gallery))}</strong></div>
+              <div style="margin-top:8px;">
+                <button type="button" class="openGalleryBtn" data-gallery-id="${escapeHtml(gallery.id)}">
+                  Open Gallery
+                </button>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `);
+    } catch (error) {
+      showError(error.message || "Failed to load galleries.", error);
     }
-
-    state.paypalReady = true;
-    state.paypalError = "";
-  })();
-
-  return paypalScriptPromise;
-}
-
-function saveUser(user) {
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
-}
-
-function loadUser() {
-  return JSON.parse(localStorage.getItem(USER_KEY) || "null");
-}
-
-function saveCart() {
-  localStorage.setItem(CART_KEY, JSON.stringify(state.cart));
-}
-
-function loadCart() {
-  return JSON.parse(localStorage.getItem(CART_KEY) || "[]");
-}
-
-function getSelectedGallery() {
-  return state.galleries.find((gallery) => gallery.id === state.selectedGalleryId) || null;
-}
-
-function isInCart(photoId) {
-  return state.cart.some((photo) => photo.id === photoId);
-}
-
-function getCartTotal() {
-  return state.cart.reduce((sum, photo) => sum + Number(photo.price || 0), 0);
-}
-
-function cleanPhotoNumber(value) {
-  return String(value || "")
-    .split("/")
-    .pop()
-    .replace(/\.[^.]+$/, "")
-    .replace(/[-_]?result$/i, "")
-    .trim();
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function render() {
-  const app = document.getElementById("app");
-  if (!app) return;
-
-  if (state.loading) {
-    app.innerHTML = `
-      <div class="checkout-box">
-        <p>Loading...</p>
-      </div>
-    `;
-    renderCart();
-    return;
   }
 
-  if (state.error) {
-    app.innerHTML = `
-      <div class="checkout-box">
-        <p>${escapeHtml(state.error)}</p>
-      </div>
-    `;
-    renderCart();
-    return;
-  }
-
-  if (!state.user || state.view === "welcome") {
-    renderWelcome(app);
-    renderCart();
-    return;
-  }
-
-  if (state.view === "checkout") {
-    renderCheckout(app);
-    renderCart();
-    return;
-  }
-
-  if (state.view === "confirmation") {
-    renderConfirmation(app);
-    renderCart();
-    return;
-  }
-
-  if (state.selectedGalleryId && state.view === "gallery") {
-    renderGallery(app);
-    renderCart();
-    return;
-  }
-
-  renderGalleryList(app);
-  renderCart();
-}
-
-function renderWelcome(app) {
-  app.innerHTML = `
-    <div class="welcome-wrap">
-      <div class="welcome-card">
-        <h1 class="welcome-logo">
-          <span class="logo-mad">Mad</span><span class="logo-pix">Pix</span>
-        </h1>
-        <p class="welcome-text">A simple way to view and buy your photos.</p>
-
-        <input id="welcomeName" type="text" placeholder="Your Name" />
-        <input id="welcomePhone" type="text" placeholder="Phone Number" />
-        <input id="welcomeEmail" type="email" placeholder="Email Address" />
-
-        <button id="welcomeEnterBtn" class="admin-primary-button" type="button">
-          ${state.savingVisitor ? "Entering..." : "Enter"}
-        </button>
-      </div>
-    </div>
-  `;
-
-  const nameInput = document.getElementById("welcomeName");
-  const phoneInput = document.getElementById("welcomePhone");
-  const emailInput = document.getElementById("welcomeEmail");
-
-  if (state.user) {
-    nameInput.value = state.user.name || "";
-    phoneInput.value = state.user.phone || "";
-    emailInput.value = state.user.email || "";
-  }
-
-  document.getElementById("welcomeEnterBtn").onclick = async () => {
-    const name = nameInput.value.trim();
-    const phone = phoneInput.value.trim();
-    const email = emailInput.value.trim();
-
-    if (!name || !phone || !email) {
-      alert("Please complete all fields");
-      return;
-    }
-
-    if (!supabaseClient) {
-      alert("Supabase is not connected.");
-      return;
-    }
-
-    state.savingVisitor = true;
-    render();
-
-    const visitorId = crypto.randomUUID();
-
+  async function loadVisitors() {
     try {
-      const { error } = await supabaseClient
-        .from("pe_visitors")
-        .insert([
-          {
-            id: visitorId,
-            name,
-            phone,
-            email
-          }
-        ]);
+      showLoading("Loading visitors...");
+      const result = await queryVisitorTable();
+      const data = result.data || [];
 
-      if (error) {
-        throw error;
+      if (!data.length) {
+        setOutput(`<div style="padding:12px;margin-top:12px;">No visitor records found.</div>`);
+        return;
       }
 
-      state.user = { id: visitorId, name, phone, email };
-      saveUser(state.user);
-      state.savingVisitor = false;
-      state.view = "galleries";
-      render();
+      setOutput(`
+        <div style="margin-top:12px;">
+          <div style="margin-bottom:12px;"><strong>Visitors</strong></div>
+          <div style="margin-bottom:12px;font-size:12px;opacity:0.7;">Source table: ${escapeHtml(result.tableName)}</div>
+          <div style="overflow:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">When</th>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Gallery</th>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Visitor</th>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.map((row) => `
+                  <tr>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.created_at || row.visited_at || "")}</td>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.gallery_id || row.gallery_name || row.gallery_slug || "")}</td>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.email || row.name || row.visitor_id || row.ip || "")}</td>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.referrer || row.source || "")}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `);
     } catch (error) {
-      console.error("Save visitor error:", error);
-      state.savingVisitor = false;
-      render();
-      alert("Could not save visitor");
+      showError("Could not load visitors. No working visitors table found.", error);
     }
-  };
-}
-
-function renderGalleryList(app) {
-  app.innerHTML = `
-    <section class="intro">
-      <h2>Select Your Photos</h2>
-      <p>Choose a gallery below to view and purchase your photos.</p>
-    </section>
-
-    <section class="gallery-grid">
-      ${state.galleries.map((gallery) => `
-        <article class="gallery-card">
-          <div class="gallery-card-image-wrap">
-            <img
-              src="${escapeHtml(gallery.cover || "")}"
-              alt="${escapeHtml(gallery.title)}"
-              class="gallery-card-image"
-            />
-          </div>
-          <div class="gallery-card-content">
-            <h3>${escapeHtml(gallery.title)}</h3>
-            <p>${gallery.photos.length} photos</p>
-            <button class="gallery-card-button open-gallery-btn" data-id="${gallery.id}" type="button">
-              Open Gallery
-            </button>
-          </div>
-        </article>
-      `).join("")}
-    </section>
-  `;
-
-  document.querySelectorAll(".open-gallery-btn").forEach((button) => {
-    button.onclick = () => {
-      state.selectedGalleryId = button.dataset.id;
-      state.view = "gallery";
-      render();
-    };
-  });
-}
-
-function renderGallery(app) {
-  const gallery = getSelectedGallery();
-
-  if (!gallery) {
-    state.selectedGalleryId = null;
-    state.view = "galleries";
-    render();
-    return;
   }
 
-  app.innerHTML = `
-    <section class="intro">
-      <button id="backToGalleriesBtn" class="back-button" type="button">← Back</button>
-      <h2 style="margin-top:8px;">${escapeHtml(gallery.title)}</h2>
-      <p>${escapeHtml(state.user.name)} — select your photos below.</p>
-    </section>
+  async function loadOrders() {
+    try {
+      showLoading("Loading purchases...");
+      const result = await queryOrdersTable();
+      const data = result.data || [];
 
-    <section class="photo-grid">
-      ${gallery.photos.map((photo) => `
-        <article class="photo-card">
-          <div class="photo-card-image-wrap">
-            <img
-              src="${escapeHtml(photo.image)}"
-              alt="${escapeHtml(photo.photoNumber)}"
-              class="photo-card-image"
-            />
+      if (!data.length) {
+        setOutput(`<div style="padding:12px;margin-top:12px;">No purchase records found.</div>`);
+        return;
+      }
+
+      setOutput(`
+        <div style="margin-top:12px;">
+          <div style="margin-bottom:12px;"><strong>Purchases</strong></div>
+          <div style="margin-bottom:12px;font-size:12px;opacity:0.7;">Source table: ${escapeHtml(result.tableName)}</div>
+          <div style="overflow:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">When</th>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Buyer</th>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Total</th>
+                  <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.map((row) => `
+                  <tr>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(row.created_at || "")}</td>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">
+                      ${escapeHtml(
+                        row.customer_email ||
+                        row.customer_name ||
+                        row.email ||
+                        row.name ||
+                        row.buyer_email ||
+                        row.buyer_name ||
+                        ""
+                      )}
+                    </td>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">
+                      ${escapeHtml(
+                        formatMoney(
+                          row.total ||
+                          row.amount ||
+                          row.total_amount ||
+                          row.price_total ||
+                          row.revenue ||
+                          0
+                        )
+                      )}
+                    </td>
+                    <td style="padding:8px;border-bottom:1px solid #eee;">
+                      ${escapeHtml(
+                        row.payment_status ||
+                        row.status ||
+                        row.order_status ||
+                        ""
+                      )}
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
           </div>
-          <div class="photo-card-content photo-card-compact-content">
-            <h3 class="photo-card-number">${escapeHtml(photo.photoNumber)}</h3>
-            <div class="photo-card-action-row">
-              <span class="photo-card-price">$${Number(photo.price).toFixed(2)}</span>
-              <button
-                class="select-btn photo-select-btn photo-inline-btn"
-                data-id="${photo.id}"
-                type="button"
-              >
-                ${isInCart(photo.id) ? "Remove" : "Add to Cart"}
+        </div>
+      `);
+    } catch (error) {
+      showError("Could not load purchases. No working purchases table found.", error);
+    }
+  }
+
+  async function openGallery(galleryId) {
+    try {
+      showLoading("Loading gallery...");
+      const sb = await getSupabaseClient();
+
+      const { data: gallery, error: galleryError } = await sb
+        .from("pe_galleries")
+        .select("*")
+        .eq("id", galleryId)
+        .single();
+
+      if (galleryError) throw galleryError;
+
+      const { data: photos, error: photosError } = await sb
+        .from("pe_photos")
+        .select("*")
+        .eq("gallery_id", galleryId)
+        .order("created_at", { ascending: true });
+
+      if (photosError) throw photosError;
+
+      const photoList = Array.isArray(photos) ? photos : [];
+
+      let galleryPrice = "";
+      if (photoList.length > 0) {
+        const pricedPhoto = photoList.find((photo) => photo.price !== null && photo.price !== undefined && photo.price !== "");
+        if (pricedPhoto) {
+          galleryPrice = String(pricedPhoto.price);
+        }
+      }
+
+      const title = getGalleryName(gallery);
+      const liveCount = photoList.filter((photo) => !!photo.is_live).length;
+
+      setOutput(`
+        <div style="margin-top:12px;">
+          <div style="margin-bottom:16px;">
+            <button type="button" id="backToGalleriesBtn">Back to Galleries</button>
+            <button type="button" id="uploadPhotosBtn" style="margin-left:8px;">Upload Photos</button>
+            <button type="button" id="deleteGalleryBtn" data-gallery-id="${escapeHtml(galleryId)}" data-gallery-name="${escapeHtml(title)}" style="margin-left:8px;">Delete Gallery</button>
+            <input type="file" id="photoUploadInput" multiple style="display:none;" data-gallery-id="${escapeHtml(galleryId)}" />
+          </div>
+
+          <div style="padding:18px;border-bottom:1px solid #ddd;">
+            <h3 style="margin-bottom:12px;">${escapeHtml(title)}</h3>
+
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:14px;">
+              <div style="min-width:220px;flex:0 1 260px;">
+                <label style="display:block;margin-bottom:6px;">Gallery Price</label>
+                <input type="number" step="0.01" id="galleryPriceInput" value="${escapeHtml(galleryPrice)}">
+              </div>
+              <div>
+                <button type="button" id="saveGalleryPriceBtn" data-gallery-id="${escapeHtml(galleryId)}">
+                  Save Gallery Price
+                </button>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+              <button type="button" id="makeGalleryLiveBtn" data-gallery-id="${escapeHtml(galleryId)}">
+                Make Gallery Live
               </button>
+              <button type="button" id="makeGalleryDraftBtn" data-gallery-id="${escapeHtml(galleryId)}">
+                Make Gallery Draft
+              </button>
+              <div style="font-size:14px;color:#6b7280;">
+                ${escapeHtml(String(liveCount))} of ${escapeHtml(String(photoList.length))} live
+              </div>
             </div>
           </div>
-        </article>
-      `).join("")}
-    </section>
-  `;
 
-  document.getElementById("backToGalleriesBtn").onclick = () => {
-    state.selectedGalleryId = null;
-    state.view = "galleries";
-    render();
-  };
+          ${
+            !photoList.length
+              ? `<div style="padding:18px 0;">No photos in this gallery yet.</div>`
+              : `
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:18px;">
+                  ${photoList.map((photo) => {
+                    const photoNumber = cleanPhotoNumber(photo);
+                    return `
+                      <div style="padding:14px;border:1px solid #e5e7eb;border-radius:18px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,0.05);">
+                        <div style="margin-bottom:10px;">
+                          ${
+                            photo.image_url
+                              ? `<img src="${escapeHtml(photo.image_url)}" alt="" style="width:100%;height:180px;object-fit:cover;border-radius:14px;">`
+                              : `<div style="height:180px;border-radius:14px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;">No image</div>`
+                          }
+                        </div>
 
-  document.querySelectorAll(".photo-select-btn").forEach((button) => {
-    button.onclick = () => {
-      toggleCart(button.dataset.id);
-    };
-  });
-}
+                        <div style="font-size:24px;font-weight:800;line-height:1.1;margin-bottom:12px;color:#111827;">
+                          ${escapeHtml(photoNumber || "Photo")}
+                        </div>
 
-function renderCheckout(app) {
-  const total = getCartTotal();
+                        <div style="margin-bottom:10px;">
+                          <label style="display:block;margin-bottom:6px;">Sort Order</label>
+                          <input
+                            type="number"
+                            class="photoSortInput"
+                            data-photo-id="${escapeHtml(photo.id)}"
+                            data-gallery-id="${escapeHtml(galleryId)}"
+                            value="${escapeHtml(photo.sort_order || "")}"
+                          >
+                        </div>
 
-  app.innerHTML = `
-    <section class="intro">
-      <button id="backFromCheckoutBtn" class="back-button" type="button">← Back</button>
-      <h2 style="margin-top:8px;">Checkout</h2>
-      <p>Please confirm your details and complete payment with PayPal.</p>
-    </section>
-
-    <div class="checkout-box">
-      <h3>Your Order</h3>
-      <ul>
-        ${state.cart.map((photo) => `
-          <li>${escapeHtml(photo.photoNumber || photo.title)} - $${Number(photo.price).toFixed(2)}</li>
-        `).join("")}
-      </ul>
-
-      <p><strong>Total: $${total.toFixed(2)}</strong></p>
-
-      <input id="checkoutName" type="text" placeholder="Your Name" value="${escapeHtml(state.user?.name || "")}" />
-      <input id="checkoutPhone" type="text" placeholder="Phone Number" value="${escapeHtml(state.user?.phone || "")}" />
-      <input id="checkoutEmail" type="email" placeholder="Email Address" value="${escapeHtml(state.user?.email || "")}" />
-
-      <div id="paypalStatus" style="margin-top:16px;color:#6b7280;">
-        ${state.paypalError ? escapeHtml(state.paypalError) : "Loading PayPal..."}
-      </div>
-
-      <div id="paypal-button-container" style="margin-top:16px;"></div>
-    </div>
-  `;
-
-  document.getElementById("backFromCheckoutBtn").onclick = () => {
-    if (state.selectedGalleryId) {
-      state.view = "gallery";
-    } else {
-      state.view = "galleries";
-    }
-    render();
-  };
-
-  mountPayPalButtons();
-}
-
-function renderConfirmation(app) {
-  app.innerHTML = `
-    <section class="intro">
-      <h2>Payment Received</h2>
-      <p>Thank you ${escapeHtml(state.user?.name || "")}. Your PayPal payment has been received and your order has been saved.</p>
-    </section>
-
-    <div class="checkout-box">
-      <p><strong>PayPal Order ID:</strong></p>
-      <p>${escapeHtml(state.lastPayPalOrderId || "—")}</p>
-
-      <p style="margin-top:12px;"><strong>PayPal Capture ID:</strong></p>
-      <p>${escapeHtml(state.lastPayPalCaptureId || "—")}</p>
-
-      <button id="backHomeBtn" type="button">Back to Galleries</button>
-    </div>
-  `;
-
-  document.getElementById("backHomeBtn").onclick = () => {
-    state.cart = [];
-    saveCart();
-    state.selectedGalleryId = null;
-    state.view = "galleries";
-    render();
-  };
-}
-
-function toggleCart(photoId) {
-  if (isInCart(photoId)) {
-    state.cart = state.cart.filter((photo) => photo.id !== photoId);
-  } else {
-    const gallery = getSelectedGallery();
-    if (!gallery) return;
-
-    const photo = gallery.photos.find((item) => item.id === photoId);
-    if (photo) {
-      state.cart.push(photo);
-    }
-  }
-
-  saveCart();
-  render();
-}
-
-function renderCart() {
-  let cart = document.getElementById("cart");
-
-  if (!cart) {
-    cart = document.createElement("div");
-    cart.id = "cart";
-    document.body.appendChild(cart);
-  }
-
-  const total = getCartTotal();
-
-  cart.innerHTML = `
-    <div class="cart-box">
-      <h3>Cart (${state.cart.length})</h3>
-      <p>Total: $${total.toFixed(2)}</p>
-      <button id="checkoutBtn" type="button">Checkout</button>
-      <button id="clearCartBtn" type="button">Clear</button>
-    </div>
-  `;
-
-  document.getElementById("clearCartBtn").onclick = () => {
-    state.cart = [];
-    saveCart();
-    render();
-  };
-
-  document.getElementById("checkoutBtn").onclick = () => {
-    if (state.cart.length === 0) return;
-    if (!state.user) {
-      state.view = "welcome";
-    } else {
-      state.view = "checkout";
-    }
-    render();
-  };
-}
-
-function getCheckoutFields() {
-  const nameInput = document.getElementById("checkoutName");
-  const phoneInput = document.getElementById("checkoutPhone");
-  const emailInput = document.getElementById("checkoutEmail");
-
-  if (!nameInput || !phoneInput || !emailInput) {
-    throw new Error("Checkout form is missing.");
-  }
-
-  const name = nameInput.value.trim();
-  const phone = phoneInput.value.trim();
-  const email = emailInput.value.trim();
-
-  if (!name || !phone || !email) {
-    throw new Error("Please complete all fields.");
-  }
-
-  if (state.cart.length === 0) {
-    throw new Error("Your cart is empty.");
-  }
-
-  return { name, phone, email };
-}
-
-async function mountPayPalButtons() {
-  const statusEl = document.getElementById("paypalStatus");
-  const container = document.getElementById("paypal-button-container");
-
-  if (!statusEl || !container || state.view !== "checkout") {
-    return;
-  }
-
-  container.innerHTML = "";
-  statusEl.textContent = "Loading PayPal...";
-
-  try {
-    await loadPayPalSdk();
-
-    await window.paypal
-      .Buttons({
-        style: {
-          layout: "vertical",
-          shape: "rect",
-          label: "paypal"
-        },
-
-        createOrder(data, actions) {
-          try {
-            getCheckoutFields();
-          } catch (error) {
-            statusEl.textContent = error.message;
-            return Promise.reject(error);
+                        <div style="margin-bottom:4px;">
+                          <label>
+                            <input
+                              type="checkbox"
+                              class="photoLiveInput"
+                              data-photo-id="${escapeHtml(photo.id)}"
+                              data-gallery-id="${escapeHtml(galleryId)}"
+                              ${photo.is_live ? "checked" : ""}
+                            >
+                            Live
+                          </label>
+                        </div>
+                      </div>
+                    `;
+                  }).join("")}
+                </div>
+              `
           }
-
-          statusEl.textContent = "";
-
-          return actions.order.create({
-            purchase_units: [
-              {
-                amount: {
-                  currency_code: "NZD",
-                  value: getCartTotal().toFixed(2)
-                }
-              }
-            ]
-          });
-        },
-
-        async onApprove(data, actions) {
-          statusEl.textContent = "Processing PayPal payment...";
-
-          const details = await actions.order.capture();
-          const captureId =
-            details &&
-            details.purchase_units &&
-            details.purchase_units[0] &&
-            details.purchase_units[0].payments &&
-            details.purchase_units[0].payments.captures &&
-            details.purchase_units[0].payments.captures[0] &&
-            details.purchase_units[0].payments.captures[0].id
-              ? details.purchase_units[0].payments.captures[0].id
-              : "";
-
-          await submitOrder({
-            paymentMethod: "paypal",
-            paymentStatus: "paid",
-            paypalOrderId: data.orderID || "",
-            paypalCaptureId: captureId || "",
-            paypalPayerId: data.payerID || ""
-          });
-
-          statusEl.textContent = "";
-        },
-
-        onCancel() {
-          statusEl.textContent = "PayPal checkout cancelled.";
-        },
-
-        onError(error) {
-          console.error("PayPal error:", error);
-          statusEl.textContent = "PayPal could not start.";
-        }
-      })
-      .render("#paypal-button-container");
-
-    statusEl.textContent = "";
-  } catch (error) {
-    console.error("PayPal setup error:", error);
-    state.paypalError = error.message || "PayPal could not load.";
-    statusEl.textContent = state.paypalError;
-  }
-}
-
-async function submitOrder(paymentData) {
-  if (!supabaseClient) {
-    alert("Supabase is not connected.");
-    return;
-  }
-
-  let checkout;
-  try {
-    checkout = getCheckoutFields();
-  } catch (error) {
-    alert(error.message);
-    return;
-  }
-
-  const { name, phone, email } = checkout;
-  const total = getCartTotal();
-
-  state.user = { ...(state.user || {}), name, phone, email };
-  saveUser(state.user);
-
-  state.savingOrder = true;
-  render();
-
-  const orderId = crypto.randomUUID();
-
-  try {
-    const { error: orderError } = await supabaseClient
-      .from("pe_orders")
-      .insert([
-        {
-          id: orderId,
-          customer_name: name,
-          customer_email: email,
-          total_amount: total,
-          payment_status: paymentData.paymentStatus || "paid",
-          payment_method: paymentData.paymentMethod || "paypal",
-          notes:
-            `Phone: ${phone}` +
-            `${state.user?.id ? ` | Visitor ID: ${state.user.id}` : ""}` +
-            `${paymentData.paypalOrderId ? ` | PayPal Order ID: ${paymentData.paypalOrderId}` : ""}` +
-            `${paymentData.paypalCaptureId ? ` | PayPal Capture ID: ${paymentData.paypalCaptureId}` : ""}` +
-            `${paymentData.paypalPayerId ? ` | PayPal Payer ID: ${paymentData.paypalPayerId}` : ""}`
-        }
-      ]);
-
-    if (orderError) {
-      throw orderError;
+        </div>
+      `);
+    } catch (error) {
+      showError(error.message || "Failed to open gallery.", error);
     }
-
-    const orderItems = state.cart.map((item) => ({
-      order_id: orderId,
-      photo_id: item.id,
-      photo_title: item.photoNumber || item.title,
-      unit_price: Number(item.price)
-    }));
-
-    const { error: itemsError } = await supabaseClient
-      .from("pe_order_items")
-      .insert(orderItems);
-
-    if (itemsError) {
-      throw itemsError;
-    }
-
-    state.lastPayPalOrderId = paymentData.paypalOrderId || "";
-    state.lastPayPalCaptureId = paymentData.paypalCaptureId || "";
-
-    state.savingOrder = false;
-    state.view = "confirmation";
-    render();
-  } catch (error) {
-    console.error("Submit order error:", error);
-    state.savingOrder = false;
-    render();
-    alert(
-      "PayPal payment may have succeeded, but the order could not be saved. " +
-      (paymentData.paypalOrderId ? `PayPal Order ID: ${paymentData.paypalOrderId}` : "")
-    );
-  }
-}
-
-async function loadData() {
-  if (!supabaseClient) {
-    render();
-    return;
   }
 
-  state.loading = true;
-  state.error = "";
-  render();
+  function showCreateGalleryForm() {
+    setOutput(`
+      <div style="margin-top:12px;">
+        <div style="margin-bottom:12px;">
+          <button type="button" id="backToGalleriesBtn">Back to Galleries</button>
+        </div>
 
-  try {
-    const { data: galleriesData, error: galleriesError } = await supabaseClient
-      .from("pe_galleries")
-      .select("*")
-      .eq("is_live", true)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
+        <h3>Create Gallery</h3>
 
-    if (galleriesError) {
-      throw galleriesError;
-    }
+        <div style="margin-bottom:12px;">
+          <label style="display:block;margin-bottom:6px;">Gallery Name</label>
+          <input type="text" id="newGalleryName">
+        </div>
 
-    const { data: photosData, error: photosError } = await supabaseClient
-      .from("pe_photos")
-      .select("*")
-      .eq("is_live", true)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
+        <div>
+          <button type="button" id="saveNewGalleryBtn">Create Gallery</button>
+        </div>
+      </div>
+    `);
+  }
 
-    if (photosError) {
-      throw photosError;
-    }
+  async function createGallery() {
+    try {
+      const nameInput = document.getElementById("newGalleryName");
+      const name = nameInput ? nameInput.value.trim() : "";
 
-    const safeGalleries = Array.isArray(galleriesData) ? galleriesData : [];
-    const safePhotos = Array.isArray(photosData) ? photosData : [];
+      if (!name) {
+        showError("Gallery name is required.");
+        return;
+      }
 
-    state.galleries = safeGalleries.map((gallery) => {
-      const photos = safePhotos
-        .filter((photo) => photo.gallery_id === gallery.id)
-        .map((photo) => {
-          const photoNumber = cleanPhotoNumber(
-            photo.file_path ||
-              photo.title ||
-              photo.name ||
-              photo.image_url
-          );
+      showLoading("Creating gallery...");
+      const sb = await getSupabaseClient();
 
-          return {
-            id: photo.id,
-            title: photo.title || photo.name || "Photo",
-            photoNumber: photoNumber || photo.title || photo.name || "Photo",
-            price: Number(photo.price || 0),
-            image: photo.image_url || ""
-          };
-        });
-
-      return {
-        id: gallery.id,
-        title: gallery.title || gallery.name || gallery.gallery_name || "Gallery",
-        cover: gallery.cover_image_url || gallery.cover || (photos[0] ? photos[0].image : ""),
-        photos
+      const payload = {
+        name: name,
+        slug: name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+        is_live: false
       };
-    });
 
-    state.loading = false;
+      const { data, error } = await sb
+        .from("pe_galleries")
+        .insert(payload)
+        .select()
+        .single();
 
-    if (!state.user) {
-      state.view = "welcome";
-    } else if (state.selectedGalleryId) {
-      state.view = "gallery";
-    } else {
-      state.view = "galleries";
+      if (error) throw error;
+
+      await openGallery(data.id);
+      await refreshStats();
+    } catch (error) {
+      showError(error.message || "Failed to create gallery.", error);
+    }
+  }
+
+  async function uploadPhotos(galleryId, files) {
+    try {
+      if (!files || files.length === 0) {
+        return;
+      }
+
+      showLoading("Uploading photos...");
+      const sb = await getSupabaseClient();
+      const bucketName = await getBucketName();
+
+      for (const file of Array.from(files)) {
+        const extension = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
+        const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+        const filePath = `${galleryId}/${fileName}`;
+        const cleanedTitle = file.name
+          .replace(/\.[^.]+$/, "")
+          .replace(/[-_]?result$/i, "")
+          .trim();
+
+        const { error: uploadError } = await sb.storage
+          .from(bucketName)
+          .upload(filePath, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: publicData } = sb.storage
+          .from(bucketName)
+          .getPublicUrl(filePath);
+
+        const { error: insertError } = await sb
+          .from("pe_photos")
+          .insert({
+            gallery_id: galleryId,
+            title: cleanedTitle,
+            image_url: publicData.publicUrl,
+            file_path: filePath,
+            is_live: true
+          });
+
+        if (insertError) throw insertError;
+      }
+
+      await openGallery(galleryId);
+      await refreshStats();
+    } catch (error) {
+      showError(error.message || "Failed to upload photos.", error);
+    }
+  }
+
+  async function saveGalleryPrice(galleryId) {
+    try {
+      const priceInput = document.getElementById("galleryPriceInput");
+      const priceValue = priceInput ? priceInput.value.trim() : "";
+
+      if (priceValue === "") {
+        showError("Gallery price is required.");
+        return;
+      }
+
+      showLoading("Saving gallery price...");
+      const sb = await getSupabaseClient();
+
+      const { error } = await sb
+        .from("pe_photos")
+        .update({ price: Number(priceValue) })
+        .eq("gallery_id", galleryId);
+
+      if (error) throw error;
+
+      await openGallery(galleryId);
+      await refreshStats();
+    } catch (error) {
+      showError(error.message || "Failed to save gallery price.", error);
+    }
+  }
+
+  async function setGalleryLive(galleryId, isLive) {
+    try {
+      showLoading(isLive ? "Making gallery live..." : "Making gallery draft...");
+      const sb = await getSupabaseClient();
+
+      const { error: photoError } = await sb
+        .from("pe_photos")
+        .update({ is_live: isLive })
+        .eq("gallery_id", galleryId);
+
+      if (photoError) throw photoError;
+
+      const { error: galleryError } = await sb
+        .from("pe_galleries")
+        .update({ is_live: isLive })
+        .eq("id", galleryId);
+
+      if (galleryError) throw galleryError;
+
+      await openGallery(galleryId);
+    } catch (error) {
+      showError(error.message || "Failed to update gallery live state.", error);
+    }
+  }
+
+  async function deleteGallery(galleryId, galleryName) {
+    const firstConfirm = window.confirm(
+      `Delete gallery "${galleryName}"?\n\nThis will remove the gallery and all of its photos.`
+    );
+
+    if (!firstConfirm) {
+      return;
     }
 
-    render();
-  } catch (error) {
-    console.error("Load data error:", error);
-    state.loading = false;
-    state.error = "Could not load galleries.";
-    render();
+    const typed = window.prompt(`Type DELETE to remove "${galleryName}"`);
+
+    if (typed !== "DELETE") {
+      return;
+    }
+
+    try {
+      showLoading(`Deleting gallery "${galleryName}"...`);
+      const sb = await getSupabaseClient();
+      const bucketName = await getBucketName();
+
+      const { data: photos, error: photosReadError } = await sb
+        .from("pe_photos")
+        .select("id, file_path")
+        .eq("gallery_id", galleryId);
+
+      if (photosReadError) throw photosReadError;
+
+      const photoRows = Array.isArray(photos) ? photos : [];
+      const filePaths = photoRows
+        .map((row) => row.file_path)
+        .filter((path) => typeof path === "string" && path.trim() !== "");
+
+      if (filePaths.length > 0) {
+        const { error: storageRemoveError } = await sb.storage
+          .from(bucketName)
+          .remove(filePaths);
+
+        if (storageRemoveError) {
+          throw storageRemoveError;
+        }
+      }
+
+      const { error: deletePhotosError } = await sb
+        .from("pe_photos")
+        .delete()
+        .eq("gallery_id", galleryId);
+
+      if (deletePhotosError) throw deletePhotosError;
+
+      const { error: deleteGalleryError } = await sb
+        .from("pe_galleries")
+        .delete()
+        .eq("id", galleryId);
+
+      if (deleteGalleryError) throw deleteGalleryError;
+
+      await refreshStats();
+      await loadGalleries();
+    } catch (error) {
+      const messageText = String(error && error.message ? error.message : error || "");
+
+      if (
+        /foreign key/i.test(messageText) ||
+        /violates/i.test(messageText) ||
+        /constraint/i.test(messageText)
+      ) {
+        showError(
+          `Could not delete "${galleryName}". It may have existing orders linked to its photos.`,
+          error
+        );
+        return;
+      }
+
+      showError(`Failed to delete gallery "${galleryName}".`, error);
+    }
   }
-}
 
-async function initApp() {
-  await createSupabaseClient();
-  state.user = loadUser();
-  state.cart = loadCart();
-  renderCart();
-  await loadData();
-}
+  async function savePhotoAuto(photoId, galleryId) {
+    try {
+      const sortInput = document.querySelector(`.photoSortInput[data-photo-id="${photoId}"]`);
+      const liveInput = document.querySelector(`.photoLiveInput[data-photo-id="${photoId}"]`);
 
-initApp();
+      const payload = {
+        is_live: liveInput ? !!liveInput.checked : false
+      };
+
+      if (sortInput && sortInput.value !== "") {
+        payload.sort_order = Number(sortInput.value);
+      } else {
+        payload.sort_order = null;
+      }
+
+      const sb = await getSupabaseClient();
+      const { error } = await sb
+        .from("pe_photos")
+        .update(payload)
+        .eq("id", photoId);
+
+      if (error) throw error;
+    } catch (error) {
+      showError(error.message || "Failed to save photo edits.", error);
+      await openGallery(galleryId);
+    }
+  }
+
+  if (galleriesBtn) {
+    galleriesBtn.addEventListener("click", loadGalleries);
+  }
+
+  if (visitorsBtn) {
+    visitorsBtn.addEventListener("click", loadVisitors);
+  }
+
+  if (ordersBtn) {
+    ordersBtn.addEventListener("click", loadOrders);
+  }
+
+  document.addEventListener("click", function (event) {
+    const openBtn = event.target.closest(".openGalleryBtn");
+    if (openBtn) {
+      openGallery(openBtn.getAttribute("data-gallery-id"));
+      return;
+    }
+
+    const backBtn = event.target.closest("#backToGalleriesBtn");
+    if (backBtn) {
+      loadGalleries();
+      return;
+    }
+
+    const createBtn = event.target.closest("#createGalleryBtn");
+    if (createBtn) {
+      showCreateGalleryForm();
+      return;
+    }
+
+    const saveNewGalleryBtn = event.target.closest("#saveNewGalleryBtn");
+    if (saveNewGalleryBtn) {
+      createGallery();
+      return;
+    }
+
+    const uploadBtn = event.target.closest("#uploadPhotosBtn");
+    if (uploadBtn) {
+      const input = document.getElementById("photoUploadInput");
+      if (input) input.click();
+      return;
+    }
+
+    const saveGalleryPriceBtn = event.target.closest("#saveGalleryPriceBtn");
+    if (saveGalleryPriceBtn) {
+      saveGalleryPrice(saveGalleryPriceBtn.getAttribute("data-gallery-id"));
+      return;
+    }
+
+    const makeGalleryLiveBtn = event.target.closest("#makeGalleryLiveBtn");
+    if (makeGalleryLiveBtn) {
+      setGalleryLive(makeGalleryLiveBtn.getAttribute("data-gallery-id"), true);
+      return;
+    }
+
+    const makeGalleryDraftBtn = event.target.closest("#makeGalleryDraftBtn");
+    if (makeGalleryDraftBtn) {
+      setGalleryLive(makeGalleryDraftBtn.getAttribute("data-gallery-id"), false);
+      return;
+    }
+
+    const deleteGalleryBtn = event.target.closest("#deleteGalleryBtn");
+    if (deleteGalleryBtn) {
+      deleteGallery(
+        deleteGalleryBtn.getAttribute("data-gallery-id"),
+        deleteGalleryBtn.getAttribute("data-gallery-name") || "Gallery"
+      );
+      return;
+    }
+  });
+
+  document.addEventListener("change", function (event) {
+    const fileInput = event.target.closest("#photoUploadInput");
+    if (fileInput) {
+      uploadPhotos(fileInput.getAttribute("data-gallery-id"), fileInput.files);
+      return;
+    }
+
+    const liveInput = event.target.closest(".photoLiveInput");
+    if (liveInput) {
+      savePhotoAuto(
+        liveInput.getAttribute("data-photo-id"),
+        liveInput.getAttribute("data-gallery-id")
+      );
+    }
+  });
+
+  document.addEventListener(
+    "blur",
+    function (event) {
+      const sortInput = event.target.closest(".photoSortInput");
+      if (sortInput) {
+        savePhotoAuto(
+          sortInput.getAttribute("data-photo-id"),
+          sortInput.getAttribute("data-gallery-id")
+        );
+      }
+    },
+    true
+  );
+
+  refreshStats();
+  console.log("MadPix admin ready");
+})();
