@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MadPix Checkout</title>
+  <title>Photoeze Checkout</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="header">
-    <h1 class="logo">MadPix</h1>
+    <h1 class="logo">Photoeze</h1>
   </header>
 
   <main class="container">
@@ -16,7 +16,7 @@
   </main>
 
   <footer class="footer">
-    <p>© 2026 MadPix</p>
+    <p>© 2026 Photoeze</p>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -165,6 +165,135 @@
         return photos.reduce((sum, photo) => sum + Number(photo.price || 0), 0);
       }
 
+      function getBuyerName(details) {
+        const given = details?.payer?.name?.given_name || "";
+        const surname = details?.payer?.name?.surname || "";
+        return `${given} ${surname}`.trim() || "PayPal Customer";
+      }
+
+      function getBuyerEmail(details) {
+        return details?.payer?.email_address || "";
+      }
+
+      function getDownloadUrl(photo) {
+        return photo.original_url || photo.image_url || photo.preview_url || "";
+      }
+
+      async function savePaidOrder(details, photos, total) {
+        const sb = getSupabaseClient();
+
+        const orderPayload = {
+          customer_name: getBuyerName(details),
+          customer_email: getBuyerEmail(details),
+          total_amount: Number(total || 0),
+          payment_status: "paid",
+          payment_method: "paypal",
+          notes: `PayPal order ${details?.id || ""}`
+        };
+
+        const { data: order, error: orderError } = await sb
+          .from("pe_orders")
+          .insert(orderPayload)
+          .select("id")
+          .single();
+
+        if (orderError) {
+          throw orderError;
+        }
+
+        const orderItems = photos.map((photo) => ({
+          order_id: order.id,
+          photo_id: photo.id,
+          photo_title: cleanPhotoLabel(photo),
+          unit_price: Number(photo.price || 0)
+        }));
+
+        const { error: itemsError } = await sb
+          .from("pe_order_items")
+          .insert(orderItems);
+
+        if (itemsError) {
+          throw itemsError;
+        }
+
+        return order;
+      }
+
+      function renderPaymentSuccess(details, photos, total, order, saveError) {
+        const downloadLinks = photos.map((photo) => {
+          const downloadUrl = getDownloadUrl(photo);
+          const label = cleanPhotoLabel(photo);
+
+          if (!downloadUrl) {
+            return `
+              <li style="margin-bottom:8px;">
+                ${escapeHtml(label)} — download not available
+              </li>
+            `;
+          }
+
+          return `
+            <li style="margin-bottom:8px;">
+              <a href="${escapeHtml(downloadUrl)}" download target="_blank" rel="noopener" style="color:#111827;font-weight:700;">
+                Download ${escapeHtml(label)}
+              </a>
+            </li>
+          `;
+        }).join("");
+
+        app.innerHTML = `
+          <div style="padding:20px;">
+            <div style="border:1px solid #e5e7eb;border-radius:12px;padding:20px;background:#ffffff;max-width:760px;margin:0 auto;">
+              <div style="font-size:22px;font-weight:700;margin-bottom:12px;">Payment successful</div>
+              <div style="margin-bottom:10px;">Thank you${details?.payer?.name?.given_name ? `, ${escapeHtml(details.payer.name.given_name)}` : ""}.</div>
+              <div style="margin-bottom:10px;">Your payment has been captured.</div>
+              <div style="margin-bottom:10px;font-weight:700;">Order total: ${formatMoney(total)}</div>
+
+              ${
+                order?.id
+                  ? `<div style="margin-bottom:18px;color:#374151;">Order recorded successfully.</div>`
+                  : `<div style="margin-bottom:18px;color:#b45309;">Payment succeeded, but order recording needs checking. Your download links are still shown below.</div>`
+              }
+
+              ${
+                saveError
+                  ? `<div style="margin-bottom:18px;color:#b45309;font-size:13px;">Admin note: ${escapeHtml(saveError.message || saveError)}</div>`
+                  : ""
+              }
+
+              <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Download your photos</div>
+              <ul style="margin:0 0 20px 20px;padding:0;">
+                ${downloadLinks}
+              </ul>
+
+              <button
+                type="button"
+                id="returnToGalleryBtn"
+                style="
+                  padding:10px 14px;
+                  border:1px solid #111827;
+                  background:#111827;
+                  color:#ffffff;
+                  border-radius:10px;
+                  cursor:pointer;
+                  font-size:14px;
+                  font-weight:700;
+                "
+              >
+                Return to Gallery
+              </button>
+            </div>
+          </div>
+        `;
+
+        const returnBtn = document.getElementById("returnToGalleryBtn");
+        if (returnBtn) {
+          returnBtn.addEventListener("click", function () {
+            window.location.href = "index.html";
+          });
+        }
+      }
+
       function renderCheckout(photos) {
         const total = getTotal(photos);
 
@@ -202,8 +331,10 @@
                         .map((photo) => `
                           <div style="display:grid;grid-template-columns:90px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f0;">
                             <img
-                              src="${escapeHtml(photo.image_url)}"
+                              src="${escapeHtml(photo.preview_url || photo.image_url)}"
                               alt="${escapeHtml(cleanPhotoLabel(photo))}"
+                              loading="lazy"
+                              decoding="async"
                               style="width:90px;height:90px;object-fit:cover;border-radius:8px;"
                             >
                             <div>
@@ -323,41 +454,18 @@
           onApprove: async function (_, actions) {
             const details = await actions.order.capture();
 
-            clearSelection();
+            let savedOrder = null;
+            let saveError = null;
 
-            app.innerHTML = `
-              <div style="padding:20px;">
-                <div style="border:1px solid #e5e7eb;border-radius:12px;padding:20px;background:#ffffff;max-width:700px;margin:0 auto;">
-                  <div style="font-size:22px;font-weight:700;margin-bottom:12px;">Payment successful</div>
-                  <div style="margin-bottom:10px;">Thank you${details?.payer?.name?.given_name ? `, ${escapeHtml(details.payer.name.given_name)}` : ""}.</div>
-                  <div style="margin-bottom:10px;">Your payment has been captured.</div>
-                  <div style="margin-bottom:20px;font-weight:700;">Order total: ${formatMoney(total)}</div>
-                  <button
-                    type="button"
-                    id="returnToGalleryBtn"
-                    style="
-                      padding:10px 14px;
-                      border:1px solid #111827;
-                      background:#111827;
-                      color:#ffffff;
-                      border-radius:10px;
-                      cursor:pointer;
-                      font-size:14px;
-                      font-weight:700;
-                    "
-                  >
-                    Return to Gallery
-                  </button>
-                </div>
-              </div>
-            `;
-
-            const returnBtn = document.getElementById("returnToGalleryBtn");
-            if (returnBtn) {
-              returnBtn.addEventListener("click", function () {
-                window.location.href = "index.html";
-              });
+            try {
+              savedOrder = await savePaidOrder(details, photos, total);
+            } catch (error) {
+              console.error("Payment captured but order save failed", error);
+              saveError = error;
             }
+
+            clearSelection();
+            renderPaymentSuccess(details, photos, total, savedOrder, saveError);
           },
 
           onError: function (error) {
