@@ -5,6 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Photoeze</title>
   <link rel="stylesheet" href="styles.css" />
+
+  <style>
+    .photoeze-watermark-wrap {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .photoeze-watermark-wrap img {
+      display: block;
+    }
+
+    .photoeze-watermark-wrap::after {
+      content: "moffspix";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%) rotate(-28deg);
+      font-size: 42px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.15); ;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+      z-index: 5;
+    }
+  </style>
 </head>
 <body>
 
@@ -23,5 +50,38 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
+
+  <script>
+    function applyPhotoezeWatermarks() {
+      const app = document.getElementById("app");
+      if (!app) return;
+
+      const images = app.querySelectorAll("img");
+
+      images.forEach(function (img) {
+        if (img.closest(".photoeze-watermark-wrap")) return;
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "photoeze-watermark-wrap";
+
+        img.parentNode.insertBefore(wrapper, img);
+        wrapper.appendChild(img);
+      });
+    }
+
+    applyPhotoezeWatermarks();
+
+    const appRoot = document.getElementById("app");
+    if (appRoot) {
+      const observer = new MutationObserver(function () {
+        applyPhotoezeWatermarks();
+      });
+
+      observer.observe(appRoot, {
+        childList: true,
+        subtree: true
+      });
+    }
+  </script>
 </body>
 </html>
