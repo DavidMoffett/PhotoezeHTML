@@ -5,64 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Photoeze</title>
   <link rel="stylesheet" href="styles.css" />
-
-  <style>
-    /* WATERMARK */
-    .watermarked {
-      position: relative;
-      display: inline-block;
-      width: 100%;
-    }
-
-    .watermarked img {
-      width: 100%;
-      display: block;
-    }
-
-    .watermarked::after {
-      content: "photoeze proof only";
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) rotate(-30deg);
-
-      font-size: 28px;
-      font-weight: 600;
-      color: rgba(180, 180, 180, 0.25);
-
-      pointer-events: none;
-      white-space: nowrap;
-    }
-  </style>
 </head>
 
 <body>
 
   <header class="header">
-    <h1>Photoeze</h1>
+    <div class="logo">Photoeze</div>
   </header>
 
-  <main class="container" id="gallery"></main>
+  <main class="container" id="app"></main>
 
+  <footer class="footer">
+    © Photoeze
+  </footer>
+
+  <!-- Supabase LIBRARY (this was missing) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- CONFIG (already correct) -->
   <script src="data.js"></script>
 
-  <script>
-    const gallery = document.getElementById("gallery");
-
-    function renderGallery(photos) {
-      gallery.innerHTML = photos.map(photo => `
-        <div style="margin-bottom:20px;">
-          
-          <div class="watermarked">
-            <img src="${photo.preview_url}" />
-          </div>
-
-        </div>
-      `).join("");
-    }
-
-    renderGallery(window.PHOTOS || []);
-  </script>
+  <!-- APP -->
+  <script src="app.js"></script>
 
 </body>
 </html>
