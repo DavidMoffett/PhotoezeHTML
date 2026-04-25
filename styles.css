@@ -645,3 +645,25 @@ body {
     font-size: 24px;
   }
 }
+.watermarked {
+  position: relative;
+  display: inline-block;
+}
+
+.watermarked::after {
+  content: "photoeze proof only";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-30deg);
+
+  font-size: 28px;
+  font-weight: 600;
+  color: rgba(180, 180, 180, 0.25);
+
+  white-space: nowrap;
+  pointer-events: none;
+
+  width: 200%;
+  text-align: center;
+}

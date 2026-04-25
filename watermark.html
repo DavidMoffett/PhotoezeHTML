@@ -1,0 +1,176 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Photoeze Watermark Creator</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      color: #111;
+    }
+
+    .wrap {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    .note {
+      margin-bottom: 20px;
+      color: #555;
+    }
+
+    .controls {
+      display: grid;
+      gap: 14px;
+      background: white;
+      padding: 18px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      border: 1px solid #ddd;
+    }
+
+    label {
+      font-weight: bold;
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+
+    .preview {
+      position: relative;
+      overflow: hidden;
+      background: #ddd;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+    }
+
+    .preview img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .watermark-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .watermark-text {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      font-size: 46px;
+      font-weight: bold;
+      color: white;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.45);
+      white-space: nowrap;
+      transform-origin: center;
+      user-select: none;
+    }
+
+    .footer {
+      margin-top: 14px;
+      color: #666;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Photoeze Watermark Creator</h1>
+    <div class="note">Standalone preview tool only. Checkout, PayPal, Supabase and downloads are untouched.</div>
+
+    <section class="controls">
+      <div>
+        <label for="watermarkText">Watermark words</label>
+        <input id="watermarkText" value="moffspix" />
+      </div>
+
+      <div>
+        <label for="direction">Watermark direction</label>
+        <select id="direction">
+          <option value="diagonal">Diagonal</option>
+          <option value="horizontal">Horizontal</option>
+          <option value="vertical">Vertical</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="opacity">Opacity</label>
+        <input id="opacity" type="range" min="0.05" max="0.8" step="0.05" value="0.25" />
+      </div>
+
+      <div>
+        <label for="size">Text size</label>
+        <input id="size" type="range" min="20" max="90" step="2" value="46" />
+      </div>
+    </section>
+
+    <section class="preview">
+      <img src="https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?q=80&w=1400&auto=format&fit=crop" alt="Watermark preview photo" />
+      <div class="watermark-layer">
+        <div id="watermark" class="watermark-text">moffspix</div>
+      </div>
+    </section>
+
+    <div class="footer">
+      This file is only for designing the watermark settings. It does not change the live gallery yet.
+    </div>
+  </main>
+
+  <script>
+    const watermark = document.getElementById("watermark");
+    const textInput = document.getElementById("watermarkText");
+    const directionInput = document.getElementById("direction");
+    const opacityInput = document.getElementById("opacity");
+    const sizeInput = document.getElementById("size");
+
+    function updateWatermark() {
+      const text = textInput.value.trim() || "moffspix";
+      const direction = directionInput.value;
+      const opacity = opacityInput.value;
+      const size = sizeInput.value;
+
+      watermark.textContent = text;
+      watermark.style.opacity = opacity;
+      watermark.style.fontSize = size + "px";
+
+      if (direction === "horizontal") {
+        watermark.style.transform = "translate(-50%, -50%) rotate(0deg)";
+      }
+
+      if (direction === "vertical") {
+        watermark.style.transform = "translate(-50%, -50%) rotate(90deg)";
+      }
+
+      if (direction === "diagonal") {
+        watermark.style.transform = "translate(-50%, -50%) rotate(-28deg)";
+      }
+    }
+
+    textInput.addEventListener("input", updateWatermark);
+    directionInput.addEventListener("change", updateWatermark);
+    opacityInput.addEventListener("input", updateWatermark);
+    sizeInput.addEventListener("input", updateWatermark);
+
+    updateWatermark();
+  </script>
+</body>
+</html>

@@ -62,6 +62,15 @@
           .trim();
       }
 
+      function getSafeDownloadName(name) {
+        const cleaned = String(name || "photo")
+          .replace(/[\\/:*?"<>|]+/g, "-")
+          .replace(/\s+/g, "-")
+          .trim();
+
+        return `${cleaned || "photo"}.jpg`;
+      }
+
       function getSupabaseClient() {
         if (window.__madpixCheckoutSupabase) {
           return window.__madpixCheckoutSupabase;
@@ -124,7 +133,7 @@
           }
 
           const script = document.createElement("script");
-          script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(window.PAYPAL_CLIENT_ID)}&currency=NZD`;
+          script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(window.PAYPAL_CLIENT_ID)}&currency=NZD&intent=capture&commit=true&locale=en_NZ`;
           script.async = true;
           script.dataset.paypalSdk = "true";
           script.onload = resolve;
@@ -219,10 +228,77 @@
         return order;
       }
 
+      async function forceDownloadFile(url, filename) {
+        const response = await fetch(url, {
+          method: "GET",
+          mode: "cors"
+        });
+
+        if (!response.ok) {
+          throw new Error("Download failed");
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+
+        const tempLink = document.createElement("a");
+        tempLink.href = objectUrl;
+        tempLink.download = filename || "photo.jpg";
+        tempLink.style.display = "none";
+
+        document.body.appendChild(tempLink);
+        tempLink.click();
+        tempLink.remove();
+
+        window.setTimeout(function () {
+          URL.revokeObjectURL(objectUrl);
+        }, 1000);
+      }
+
+      async function downloadPurchasedPhotos() {
+        const links = Array.from(document.querySelectorAll("[data-download-link='true']"));
+
+        if (!links.length) {
+          alert("No download links available.");
+          return;
+        }
+
+        const downloadBtn = document.getElementById("downloadPhotosBtn");
+        const originalText = downloadBtn ? downloadBtn.textContent : "";
+
+        if (downloadBtn) {
+          downloadBtn.disabled = true;
+          downloadBtn.textContent = "Downloading...";
+        }
+
+        try {
+          for (const link of links) {
+            const url = link.getAttribute("href");
+            const filename = link.getAttribute("data-download-name") || "photo.jpg";
+
+            if (url) {
+              await forceDownloadFile(url, filename);
+            }
+          }
+
+          if (downloadBtn) {
+            downloadBtn.textContent = "Downloaded";
+          }
+        } catch (error) {
+          console.error("Download failed", error);
+          alert("Download did not start automatically. Use the manual photo link below and choose Save link as.");
+          if (downloadBtn) {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = originalText || "Download Photos";
+          }
+        }
+      }
+
       function renderPaymentSuccess(details, photos, total, order, saveError) {
         const downloadLinks = photos.map((photo) => {
           const downloadUrl = getDownloadUrl(photo);
           const label = cleanPhotoLabel(photo);
+          const filename = getSafeDownloadName(label);
 
           if (!downloadUrl) {
             return `
@@ -234,7 +310,15 @@
 
           return `
             <li style="margin-bottom:8px;">
-              <a href="${escapeHtml(downloadUrl)}" download target="_blank" rel="noopener" style="color:#111827;font-weight:700;">
+              <a
+                href="${escapeHtml(downloadUrl)}"
+                download="${escapeHtml(filename)}"
+                target="_blank"
+                rel="noopener"
+                data-download-link="true"
+                data-download-name="${escapeHtml(filename)}"
+                style="color:#111827;font-weight:700;"
+              >
                 Download ${escapeHtml(label)}
               </a>
             </li>
@@ -244,10 +328,32 @@
         app.innerHTML = `
           <div style="padding:20px;">
             <div style="border:1px solid #e5e7eb;border-radius:12px;padding:20px;background:#ffffff;max-width:760px;margin:0 auto;">
-              <div style="font-size:22px;font-weight:700;margin-bottom:12px;">Payment successful</div>
-              <div style="margin-bottom:10px;">Thank you${details?.payer?.name?.given_name ? `, ${escapeHtml(details.payer.name.given_name)}` : ""}.</div>
-              <div style="margin-bottom:10px;">Your payment has been captured.</div>
-              <div style="margin-bottom:10px;font-weight:700;">Order total: ${formatMoney(total)}</div>
+              <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px;">
+                <div>
+                  <div style="font-size:22px;font-weight:700;margin-bottom:12px;">Payment successful</div>
+                  <div style="margin-bottom:10px;">Thank you${details?.payer?.name?.given_name ? `, ${escapeHtml(details.payer.name.given_name)}` : ""}.</div>
+                  <div style="margin-bottom:10px;">Your payment has been captured.</div>
+                  <div style="margin-bottom:10px;font-weight:700;">Order total: ${formatMoney(total)}</div>
+                </div>
+
+                <button
+                  type="button"
+                  id="downloadPhotosBtn"
+                  style="
+                    padding:12px 16px;
+                    border:1px solid #111827;
+                    background:#111827;
+                    color:#ffffff;
+                    border-radius:10px;
+                    cursor:pointer;
+                    font-size:15px;
+                    font-weight:800;
+                    white-space:nowrap;
+                  "
+                >
+                  Download Photos
+                </button>
+              </div>
 
               ${
                 order?.id
@@ -262,6 +368,10 @@
               }
 
               <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Download your photos</div>
+              <div style="margin-bottom:10px;color:#374151;font-size:14px;">
+                Click <strong>Download Photos</strong>. Your browser should save the file to its normal Downloads folder.
+              </div>
+
               <ul style="margin:0 0 20px 20px;padding:0;">
                 ${downloadLinks}
               </ul>
@@ -271,9 +381,9 @@
                 id="returnToGalleryBtn"
                 style="
                   padding:10px 14px;
-                  border:1px solid #111827;
-                  background:#111827;
-                  color:#ffffff;
+                  border:1px solid #d1d5db;
+                  background:#ffffff;
+                  color:#111827;
                   border-radius:10px;
                   cursor:pointer;
                   font-size:14px;
@@ -285,6 +395,11 @@
             </div>
           </div>
         `;
+
+        const downloadBtn = document.getElementById("downloadPhotosBtn");
+        if (downloadBtn) {
+          downloadBtn.addEventListener("click", downloadPurchasedPhotos);
+        }
 
         const returnBtn = document.getElementById("returnToGalleryBtn");
         if (returnBtn) {
@@ -426,6 +541,9 @@
 
           createOrder: function (_, actions) {
             return actions.order.create({
+              application_context: {
+                shipping_preference: "NO_SHIPPING"
+              },
               purchase_units: [
                 {
                   amount: {

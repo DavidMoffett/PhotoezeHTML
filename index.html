@@ -7,81 +7,62 @@
   <link rel="stylesheet" href="styles.css" />
 
   <style>
-    .photoeze-watermark-wrap {
+    /* WATERMARK */
+    .watermarked {
       position: relative;
-      overflow: hidden;
+      display: inline-block;
+      width: 100%;
     }
 
-    .photoeze-watermark-wrap img {
+    .watermarked img {
+      width: 100%;
       display: block;
     }
 
-    .photoeze-watermark-wrap::after {
-      content: "moffspix";
+    .watermarked::after {
+      content: "photoeze proof only";
       position: absolute;
-      left: 50%;
       top: 50%;
-      transform: translate(-50%, -50%) rotate(-28deg);
-      font-size: 42px;
-      font-weight: 700;
-      color: #ffffff; ;
-      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-      white-space: nowrap;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-30deg);
+
+      font-size: 28px;
+      font-weight: 600;
+      color: rgba(180, 180, 180, 0.25);
+
       pointer-events: none;
-      user-select: none;
-      z-index: 5;
+      white-space: nowrap;
     }
   </style>
 </head>
+
 <body>
 
   <header class="header">
-    <h1 class="logo">Photoeze</h1>
+    <h1>Photoeze</h1>
   </header>
 
-  <main class="container">
-    <div id="app"></div>
-  </main>
+  <main class="container" id="gallery"></main>
 
-  <footer class="footer">
-    <p>© 2026 Photoeze</p>
-  </footer>
-
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="data.js"></script>
-  <script src="app.js"></script>
 
   <script>
-    function applyPhotoezeWatermarks() {
-      const app = document.getElementById("app");
-      if (!app) return;
+    const gallery = document.getElementById("gallery");
 
-      const images = app.querySelectorAll("img");
+    function renderGallery(photos) {
+      gallery.innerHTML = photos.map(photo => `
+        <div style="margin-bottom:20px;">
+          
+          <div class="watermarked">
+            <img src="${photo.preview_url}" />
+          </div>
 
-      images.forEach(function (img) {
-        if (img.closest(".photoeze-watermark-wrap")) return;
-
-        const wrapper = document.createElement("div");
-        wrapper.className = "photoeze-watermark-wrap";
-
-        img.parentNode.insertBefore(wrapper, img);
-        wrapper.appendChild(img);
-      });
+        </div>
+      `).join("");
     }
 
-    applyPhotoezeWatermarks();
-
-    const appRoot = document.getElementById("app");
-    if (appRoot) {
-      const observer = new MutationObserver(function () {
-        applyPhotoezeWatermarks();
-      });
-
-      observer.observe(appRoot, {
-        childList: true,
-        subtree: true
-      });
-    }
+    renderGallery(window.PHOTOS || []);
   </script>
+
 </body>
 </html>
