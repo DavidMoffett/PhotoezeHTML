@@ -113,3 +113,36 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* EMERGENCY WATERMARK OVERRIDE - LOCK */
+.watermarked {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  overflow: hidden !important;
+}
+
+.watermarked img {
+  display: block !important;
+  width: 100% !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+.watermarked::after {
+  content: "PHOTOEZE" !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) rotate(-30deg) !important;
+  z-index: 9999 !important;
+  font-size: 52px !important;
+  font-weight: 900 !important;
+  letter-spacing: 5px !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.75) !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+  width: 240% !important;
+  text-align: center !important;
+}
