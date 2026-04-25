@@ -416,18 +416,22 @@
 
             return `
               <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#ffffff;">
-                <button
-                  type="button"
-                  class="photo-open-btn"
-                  data-photo-id="${escapeHtml(photo.id)}"
-                  class="watermarked" style="display:block;width:100%;padding:0;border:none;background:transparent;cursor:pointer;text-align:left;"
-                >
-                  <img
-                   src="${escapeHtml(photo.preview_url || photo.image_url)}" loading="lazy" decoding="async" 
-                    alt="${escapeHtml(label)}"
-                    style="width:100%;height:260px;object-fit:cover;display:block;border-radius:8px;"
-                  >
-                </button>
+                <div class="watermarked">
+  <button
+    type="button"
+    class="photo-open-btn"
+    data-photo-id="${escapeHtml(photo.id)}"
+    style="display:block;width:100%;padding:0;border:none;background:transparent;cursor:pointer;text-align:left;"
+  >
+    <img
+      src="${escapeHtml(photo.preview_url || photo.image_url)}"
+      loading="lazy"
+      decoding="async"
+      alt="${escapeHtml(label)}"
+      style="width:100%;height:260px;object-fit:cover;display:block;border-radius:8px;"
+    >
+  </button>
+</div>
 
                 <div style="margin-top:10px;font-size:15px;font-weight:700;line-height:1.35;color:#111827;">
                   ${escapeHtml(label)}
@@ -745,6 +749,7 @@
 
   init();
 })();
+
 
 
 
