@@ -577,7 +577,7 @@
             </div>
           </div>
 
-          <div style="display:flex;align-items:center;justify-content:center;">
+          <div class="watermarked" style="display:flex;align-items:center;justify-content:center;">
             <img
              src="${escapeHtml(photo.preview_url || photo.image_url)}" loading="lazy" decoding="async"
               alt="${escapeHtml(label)}"
@@ -745,3 +745,4 @@
 
   init();
 })();
+
