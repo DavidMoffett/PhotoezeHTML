@@ -420,7 +420,7 @@
                   type="button"
                   class="photo-open-btn"
                   data-photo-id="${escapeHtml(photo.id)}"
-                  style="display:block;width:100%;padding:0;border:none;background:transparent;cursor:pointer;text-align:left;"
+                  class="watermarked" style="display:block;width:100%;padding:0;border:none;background:transparent;cursor:pointer;text-align:left;"
                 >
                   <img
                    src="${escapeHtml(photo.preview_url || photo.image_url)}" loading="lazy" decoding="async" 
@@ -745,4 +745,7 @@
 
   init();
 })();
+
+
+
 
