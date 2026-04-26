@@ -1,0 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&display=swap');
+
+/* === GLOBAL BACKGROUND === */
+body {
+  background-color: #f2e9dc;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  background: #f4f6f8;
+  color: #1f2937;
+  line-height: 1.5;
+}
+
+/* PUBLIC SITE BASE */
+.header {
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 20px 24px;
+  text-align: center;
+}
+
+.logo {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 30px;
+  color: #111827;
+}
+
+.container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 28px 20px 44px;
+}
+
+.footer {
+  text-align: center;
+  padding: 24px 20px 28px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* ADMIN */
+.admin-body {
+  background: #f4f6f8;
+  color: #1f2937;
+}
+
+/* (all your admin styles unchanged above…) */
+
+/* ========================================= */
+/* 🔒 FINAL WATERMARK (LOCKED VERSION) */
+/* ========================================= */
+
+.watermarked {
+  position: relative;
+  display: block;
+  width: 100%;
+  overflow: hidden;
+}
+
+.watermarked img {
+  width: 100%;
+  display: block;
+  position: relative;
+  z-index: 1;
+}
+
+.watermarked::after {
+  content: "PHOTOEZE";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-30deg);
+
+  z-index: 10;
+
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 4px;
+
+  color: rgba(255, 255, 255, 0.30);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.35);
+
+  pointer-events: none;
+  white-space: nowrap;
+
+  width: 220%;
+  text-align: center;
+}
+
+/* RESPONSIVE (unchanged) */
+@media (max-width: 1100px) {
+  .admin-photo-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .admin-photo-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-photo-grid {
+    grid-template-columns: 1fr;
+  }
+}

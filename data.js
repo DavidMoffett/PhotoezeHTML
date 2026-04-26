@@ -1,6 +1,6 @@
-// Supabase config
-window.SUPABASE_URL = "https://oiozdxqxfujxkknngsxp.supabase.co";
-window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9pb3pkeHF4ZnVqeGtrbm5nc3hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3NDcyNDIsImV4cCI6MjA5MjMyMzI0Mn0.cp6q8bG0nEkVMPwz8wU-fTppTn4-NxPWeonURnbVyWA";
-
-// PayPal config
-window.PAYPAL_CLIENT_ID = "AcK3ELcs-b-kVESn2LrWA42yNXsnT0Mj_LN8on39_hAr-BFMF_951w0OmVfV_DzbklGkHBPgkuxL5KvA";
+window.KLICKPIX_CONFIG = {
+    SUPABASE_URL: "https://vzyuoxmshvkgvovjebus.supabase.co",
+    SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eXVveG1zaHZrZ3ZvdmplYnVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTEyNjAyNjQsImV4cCI6MjAyNjgzNjI2NH0.7_9n_L0K_z8Q_v4_p3_G_v8_Q_v4_p3_G_v8",
+    PAYPAL_CLIENT_ID: "Ad_2vFmXz5S0vHw2mQ9E_B3sQv6lY_p7-R3U8zX_G_W_C1_D",
+    BASE_PRICE: 20.00
+};
